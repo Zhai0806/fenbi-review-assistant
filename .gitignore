@@ -1,0 +1,30 @@
+# 敏感信息
+config.yaml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+
+# 数据
+data/knowledge_base.db
+data/knowledge_base.db-*
+data/reports/*
+data/chat_history.json
+!data/reports/sample/
+
+# 临时文件
+*.zip
+ngrok.exe
+ngrok_tmp/
+ngrok_new.zip
+
+# IDE
+.vscode/
+.idea/
+.claude/
+
+# 环境
+.env
+.streamlit/secrets.toml
