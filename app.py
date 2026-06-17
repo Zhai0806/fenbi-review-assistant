@@ -64,24 +64,45 @@ st.markdown("""
 # ======================== 聊天记录持久化 ========================
 
 CHAT_HISTORY_FILE = os.path.join(os.path.dirname(__file__), 'data', 'chat_history.json')
+CONV_NAMES = {"行测复盘","申论写作","备考规划","错题分析","面试准备","公基复习","随便聊聊"}
 
 
-def _load_chat_history() -> list[dict]:
-    """从文件加载聊天记录。"""
+def _load_chat_data() -> dict:
+    """加载聊天数据（多会话格式）。兼容旧版扁平列表。"""
     if os.path.exists(CHAT_HISTORY_FILE):
         try:
             with open(CHAT_HISTORY_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                data = json.load(f)
+            if isinstance(data, list):
+                # 旧版扁平列表 → 迁移为单个会话
+                import time as _t
+                data = {"conversations": [{"id": f"conv_{int(_t.time())}", "name": "旧对话", "messages": data}]}
+            return data
         except (json.JSONDecodeError, IOError):
             pass
-    return []
+    return {"conversations": []}
 
 
-def _save_chat_history(messages: list[dict]):
-    """持久化聊天记录到文件。"""
+def _save_chat_data(data: dict):
+    """保存聊天数据。"""
     os.makedirs(os.path.dirname(CHAT_HISTORY_FILE), exist_ok=True)
     with open(CHAT_HISTORY_FILE, 'w', encoding='utf-8') as f:
-        json.dump(messages, f, ensure_ascii=False, indent=2)
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def _current_conv(data: dict) -> dict:
+    """获取当前活跃会话。"""
+    convs = data.get('conversations', [])
+    if not convs:
+        import time as _t
+        conv = {"id": f"conv_{int(_t.time())}", "name": "行测复盘", "messages": []}
+        data['conversations'] = [conv]
+        return conv
+    # 返回标记为 active 的，或第一个
+    active = next((c for c in convs if c.get('active')), None)
+    if not active:
+        active = convs[-1]
+        active['active'] = True
+    return active
 
 
 # ======================== 数据库初始化 ========================
@@ -100,6 +121,28 @@ def _index_to_letter(idx) -> str:
     s = str(idx).strip()
     mapping = {'0': 'A', '1': 'B', '2': 'C', '3': 'D'}
     return mapping.get(s, s)
+
+
+def _kp_breadcrumb(keypoints: list) -> str:
+    """从知识点列表生成模块→题型→知识点 面包屑路径。"""
+    if not keypoints:
+        return ''
+    from utils.analysis import classify_module, classify_question_type
+    paths = []
+    for kp in keypoints[:3]:
+        name = kp.get('name', '') if isinstance(kp, dict) else str(kp)
+        if not name:
+            continue
+        mod_map = classify_module([name])
+        mod = next(iter(mod_map.keys()), '') if mod_map else ''
+        qt = classify_question_type(name, mod) if mod else ''
+        if qt and qt != mod:
+            paths.append(f"{mod} → {qt} → {name}")
+        elif mod:
+            paths.append(f"{mod} → {name}")
+        else:
+            paths.append(name)
+    return ' | '.join(paths)
 
 
 def _question_label(q: dict, compact: bool = False, index: int = 0) -> str:
@@ -127,6 +170,8 @@ def render_left_panel(db: KnowledgeDB):
 
     if 'selected_diags' not in st.session_state:
         st.session_state['selected_diags'] = {}
+    if 'current_exam_context' not in st.session_state:
+        st.session_state['current_exam_context'] = ''
 
     # ── 抓取新模考 ──
     with st.expander("📥 抓取新模考数据", expanded=False):
@@ -153,6 +198,17 @@ def render_left_panel(db: KnowledgeDB):
     selected_exam = exam_options[selected_label]
 
     report_path = selected_exam['report_path']
+
+    # 保存当前考试上下文，供 AI 对话使用
+    total_t = selected_exam.get('total_time_sec', 0) or 0
+    st.session_state['current_exam_context'] = (
+        f"当前选中报告：{selected_exam['exam_name']}，"
+        f"日期：{selected_exam['exam_date']}，"
+        f"共{selected_exam['total_questions']}题，"
+        f"正确{selected_exam['correct_questions']}题，"
+        f"正确率{selected_exam['correct_questions']/max(selected_exam['total_questions'],1):.1%}，"
+        f"总用时{int(total_t//60)}分{int(total_t%60)}秒"
+    )
 
     # 基本统计
     total_time = selected_exam.get('total_time_sec', 0) or 0
@@ -220,6 +276,116 @@ def render_left_panel(db: KnowledgeDB):
 
     with tab4:
         _render_persistent_weak_points(db)
+
+
+def _render_wrong_q_bank(db: KnowledgeDB, current_report_path: str = ''):
+    """错题本：跨考聚合 + 模块筛选 + 乱序 + 计时 + 交互答题。"""
+    import random as _random
+    import time as _time
+
+    st.markdown("### 📖 错题本")
+    st.caption("聚合所有考试的错题，可筛选模块、乱序出题、计时作答")
+
+    # 收集所有错题
+    all_wrong = []
+    exams = db.get_exam_records()
+    for exam in exams:
+        rp = exam['report_path']
+        if not os.path.exists(rp):
+            continue
+        try:
+            with open(rp, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            qs = data if isinstance(data, list) else data.get('questions', [])
+            for q in qs:
+                if not isinstance(q, dict):
+                    continue
+                if q.get('status') != -1:
+                    continue
+                kps = q.get('keypoints', [])
+                kp_names = [k.get('name', '') for k in kps]
+                from utils.analysis import classify_module
+                mod_map = classify_module(list(set(kp_names))) if kp_names else {}
+                mod = next(iter(mod_map.keys()), '其他') if mod_map else '其他'
+                qa = db.get_question_by_key(q.get('key', ''))
+                all_wrong.append({
+                    'exam_name': exam['exam_name'], 'exam_date': exam['exam_date'],
+                    'source': q.get('source', ''), 'key': q.get('key', ''),
+                    'content': q.get('content', ''), 'options': q.get('options', []),
+                    'your_answer': qa.get('your_answer', '') if qa else q.get('your_answer', ''),
+                    'correct_answer': qa.get('correct_answer', '') if qa else q.get('correct_answer', ''),
+                    'module': mod,
+                    'error_type': qa.get('error_type', '') if qa else '',
+                    'time_spent_sec': q.get('time_spent_sec', 0),
+                    'materialKeys': q.get('materialKeys', []),
+                })
+        except Exception:
+            continue
+
+    if not all_wrong:
+        st.info("暂无错题数据。")
+        return
+
+    # 筛选
+    col_f1, col_f2, col_f3 = st.columns(3)
+    with col_f1:
+        modules = sorted(set(q['module'] for q in all_wrong))
+        sel_mod = st.selectbox("筛选模块", ["全部"] + modules, key="wqb_mod")
+    with col_f2:
+        max_q = st.slider("每次题量", 5, min(50, len(all_wrong)), 10, key="wqb_count")
+    with col_f3:
+        shuffle_on = st.checkbox("🔀 乱序", value=True, key="wqb_shuffle")
+
+    # 过滤 + 乱序
+    pool = [q for q in all_wrong if sel_mod == "全部" or q['module'] == sel_mod]
+    if shuffle_on:
+        _random.shuffle(pool)
+    pool = pool[:max_q]
+
+    if 'wqb_index' not in st.session_state:
+        st.session_state['wqb_index'] = 0
+        st.session_state['wqb_score'] = 0
+        st.session_state['wqb_start_time'] = _time.time()
+
+    idx = st.session_state['wqb_index']
+    if idx >= len(pool):
+        elapsed = _time.time() - st.session_state['wqb_start_time']
+        score = st.session_state['wqb_score']
+        st.success(f"🎉 完成！{score}/{len(pool)} 正确（{score/max(len(pool),1):.0%}），用时 {int(elapsed//60)}分{int(elapsed%60)}秒")
+        if st.button("🔄 重新开始", key="wqb_restart"):
+            del st.session_state['wqb_index'], st.session_state['wqb_score'], st.session_state['wqb_start_time']
+            st.rerun()
+        return
+
+    q = pool[idx]
+    elapsed = _time.time() - st.session_state['wqb_start_time']
+    st.progress(idx / len(pool), f"第 {idx+1}/{len(pool)} 题 | 用时 {int(elapsed//60)}:{int(elapsed%60):02d} | 正确 {st.session_state['wqb_score']}/{idx}")
+    st.caption(f"📂 {q['module']} | 📅 {q['exam_date']} {q['exam_name'][:15]} | ⏱ 原用时 {q['time_spent_sec']}秒")
+
+    q_html = q.get('content', '')
+    if q_html:
+        q_html = q_html.replace('src="//', 'src="https://').replace("src='//", "src='https://")
+        st.markdown(q_html, unsafe_allow_html=True)
+
+    from utils.llm import _strip_html as _shb
+    opts = q.get('options', [])
+    opt_labels = [f"{chr(65+j)}. {_shb(o)[:80]}" for j, o in enumerate(opts[:4])]
+    choice = st.radio("你的选择：", opt_labels, key=f"wqb_{idx}", index=None)
+
+    if choice and st.button("✅ 提交", key=f"wqb_submit_{idx}", type="primary"):
+        picked = str(opt_labels.index(choice))
+        correct = str(q.get('correct_answer', ''))
+        if picked == correct:
+            st.session_state['wqb_score'] += 1
+            st.success(f"✅ 正确！")
+        else:
+            st.error(f"❌ 你选 {choice[0]}，正确 {_index_to_letter(correct)} | 原错因：{q.get('error_type', '-')}")
+        st.session_state['wqb_index'] += 1
+        st.rerun()
+
+    if st.button("⏭ 跳过", key=f"wqb_skip_{idx}"):
+        st.session_state['wqb_index'] += 1
+        st.rerun()
 
 
 def _render_all_questions(questions: list[dict], db: KnowledgeDB):
@@ -419,6 +585,9 @@ def _render_wrong_questions(questions: list[dict], db: KnowledgeDB, report_path:
                             st.markdown(q_html, unsafe_allow_html=True)
                         if opt_str:
                             st.caption(f"📋 {opt_str}")
+                        kp_path = _kp_breadcrumb(rq.get('keypoints', [])) if rq else ''
+                        if kp_path:
+                            st.caption(f"🏷 {kp_path}")
                         st.caption(
                             f"🖊 你的：{_index_to_letter(qa.get('your_answer'))}  |  "
                             f"✅ 正确：{_index_to_letter(qa.get('correct_answer'))}  |  "
@@ -468,6 +637,9 @@ def _render_wrong_questions(questions: list[dict], db: KnowledgeDB, report_path:
                     st.markdown(q_html, unsafe_allow_html=True)
                 if opt_str:
                     st.caption(f"📋 {opt_str}")
+                kp_path = _kp_breadcrumb(rq.get('keypoints', [])) if rq else ''
+                if kp_path:
+                    st.caption(f"🏷 {kp_path}")
                 st.caption(
                     f"🖊 你的：{_index_to_letter(qa.get('your_answer'))}  |  "
                     f"✅ 正确：{_index_to_letter(qa.get('correct_answer'))}  |  "
@@ -495,21 +667,83 @@ def _render_wrong_questions(questions: list[dict], db: KnowledgeDB, report_path:
 
     # ── 学习建议 ──
     labeled = sum(1 for q in wrong_qs if q.get('error_type') and q['error_type'] != '其他')
-    if labeled >= len(wrong_qs) * 0.5:  # 半数以上已标注
+    if labeled >= len(wrong_qs) * 0.5:
+        # 每日复习日程
+        from collections import Counter
+        et_counts = Counter(q.get('error_type', '其他') for q in wrong_qs if q.get('error_type') and q['error_type'] != '其他')
+        top_et = et_counts.most_common(3)
+        if top_et:
+            st.markdown("### 📅 本周复习计划")
+            st.markdown(
+                f"- **今日**：重做本卷 {len(wrong_qs)} 道错题（重做模式），每题写错因总结\n"
+                f"- **明天**：针对「{top_et[0][0]}」做 10 道同类题\n"
+                + (f"- **后天**：针对「{top_et[1][0]}」做 10 道同类题\n" if len(top_et) > 1 else "") +
+                f"- **周末**：完整复盘本卷，标记仍有困难的知识点"
+            )
         _render_learning_advice(wrong_qs, db)
 
     # ── 手动微调列表 ──
     st.markdown("---")
-    st.caption("已标注的错题，可手动修改")
+    retry_mode = st.checkbox("🔄 重做模式（交互答题）", key="retry_mode")
+
+    # 预加载原始题目
+    retry_raw = {}
+    try:
+        with open(report_path, 'r', encoding='utf-8') as _f:
+            _d = json.load(_f)
+        _list = _d if isinstance(_d, list) else _d.get('questions', _d.get('data', []))
+        retry_raw = {q.get('key', ''): q for q in _list if isinstance(q, dict)}
+    except Exception:
+        pass
+
+    from utils.llm import _strip_html as _sh
+
     for i, q in enumerate(wrong_qs, 1):
         current_type = q.get('error_type') or '其他'
-        with st.expander(
-            f"{i}. {_question_label(q, compact=True, index=i)} | "
-            f"你的：{_index_to_letter(q.get('your_answer'))} → "
-            f"正确：{_index_to_letter(q.get('correct_answer'))} | "
-            f"{current_type}",
-            expanded=False
-        ):
+        rq = retry_raw.get(q['question_key'], {})
+        label = _question_label(q, compact=True, index=i)
+
+        if retry_mode:
+            # 交互重做模式
+            with st.expander(f"{label} | 重做中...", expanded=(i <= 1)):
+                q_html = rq.get('content', '') if rq else ''
+                if q_html:
+                    q_html = q_html.replace('src="//', 'src="https://').replace("src='//", "src='https://")
+                    st.markdown(q_html, unsafe_allow_html=True)
+                opts = rq.get('options', []) if rq else []
+                if opts:
+                    opt_labels = [f"{chr(65+j)}. {_sh(o)[:60]}" for j, o in enumerate(opts[:4])]
+                    choice = st.radio("你的选择：", opt_labels, key=f"retry_{q['question_key']}", index=None,
+                                      format_func=lambda x: x)
+                    if choice and st.button("提交", key=f"submit_{q['question_key']}"):
+                        picked = str(opt_labels.index(choice))
+                        correct = str(q.get('correct_answer', ''))
+                        if picked == correct:
+                            st.success(f"✅ 正确！答案就是 {choice[0]}")
+                        else:
+                            st.error(f"❌ 选 {choice[0]}，正确是 {_index_to_letter(correct)}")
+                        st.caption(f"💡 原错因：{current_type}")
+        else:
+            # 普通模式
+            with st.expander(
+                f"{label} | 你的：{_index_to_letter(q.get('your_answer'))} → "
+                f"正确：{_index_to_letter(q.get('correct_answer'))} | {current_type}",
+                expanded=False
+            ):
+                q_html = rq.get('content', '') if rq else ''
+                if q_html:
+                    q_html = q_html.replace('src="//', 'src="https://').replace("src='//", "src='https://")
+                    st.markdown(q_html, unsafe_allow_html=True)
+                opts = rq.get('options', []) if rq else []
+                if opts:
+                    from utils.llm import _strip_html as _sh3
+                    opt_str = ' | '.join(f'{chr(65+j)}. {_sh3(o)[:60]}' for j, o in enumerate(opts[:4]))
+                    st.caption(f"📋 {opt_str}")
+                st.caption(
+                    f"🖊 你的：{_index_to_letter(q.get('your_answer'))}  |  "
+                    f"✅ 正确：{_index_to_letter(q.get('correct_answer'))}"
+                )
+
             col1, col2 = st.columns([1, 1])
             with col1:
                 try:
@@ -533,6 +767,115 @@ def _render_wrong_questions(questions: list[dict], db: KnowledgeDB, report_path:
                 )
                 if new_note != current_note:
                     db.update_question_field(q['question_key'], 'user_note', new_note)
+
+    # ── 导出 ──
+    st.markdown("---")
+    from utils.llm import _strip_html as _sh
+    export_text = "# 错题清单\n\n"
+    for i, q in enumerate(wrong_qs, 1):
+        et = q.get('error_type') or '其他'
+        rq = retry_raw.get(q['question_key'], {})
+        # 材料
+        mat_keys = rq.get('materialKeys', []) if rq else []
+        mat_content = ''
+        for mk in mat_keys:
+            mat = retry_raw.get('_materials', {}).get(str(mk), {})
+            if not mat and raw_materials if 'raw_materials' in dir() else {}:
+                pass  # skip complex material lookup in export
+            break  # materials not easily accessible here, skip for export
+        # 题目内容
+        content = _sh(rq.get('content', ''))[:500] if rq else ''
+        opts = rq.get('options', []) if rq else []
+        opt_text = '\n'.join(f"{chr(65+j)}. {_sh(o)[:80]}" for j, o in enumerate(opts[:4]))
+        kp_path = _kp_breadcrumb(rq.get('keypoints', [])) if rq else ''
+        export_text += (
+            f"## {i}. {q.get('source', '')}\n"
+            f"**知识点**：{kp_path}\n\n"
+            f"**题目**：{content}\n\n"
+            f"**选项**：\n{opt_text}\n\n"
+            f"- 你的答案：{_index_to_letter(q.get('your_answer'))} | "
+            f"正确答案：{_index_to_letter(q.get('correct_answer'))}\n"
+            f"- 错误类型：{et} | 用时：{q.get('time_spent_sec', '-')}秒\n"
+            f"- 全站正确率：{(q.get('global_correct_ratio', 0) or 0) * 100:.1f}%\n\n"
+            f"---\n\n"
+        )
+    st.download_button(
+        "📥 导出错题清单", export_text,
+        file_name="错题清单.md", mime="text/markdown"
+    )
+
+
+def _llm_available():
+    try:
+        from utils.llm import _load_llm_config
+        cfg = _load_llm_config()
+        return bool(cfg.get('api_key') or os.environ.get('DEEPSEEK_API_KEY'))
+    except Exception:
+        return False
+
+
+def _render_notes(db: KnowledgeDB):
+    """笔记页面：增删改查。"""
+    st.markdown("### 📝 备考笔记")
+    notes = db.get_all_notes()
+
+    # 新增笔记
+    with st.expander("➕ 新建笔记", expanded=not notes):
+        n_title = st.text_input("标题", key="new_note_title")
+        n_content = st.text_area("内容", key="new_note_content", height=150)
+        if st.button("保存笔记", key="save_note") and n_title:
+            db.upsert_note(title=n_title, content=n_content)
+            st.rerun()
+
+    if not notes:
+        st.info("暂无笔记")
+        return
+
+    for n in notes:
+        with st.expander(f"📌 {n.get('title', '无标题')} — {n.get('updated_at', '')[:10]}"):
+            st.markdown(n.get('content', ''))
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("🗑 删除", key=f"del_note_{n['id']}"):
+                    db.delete_note(n['id'])
+                    st.rerun()
+            with c2:
+                new_content = st.text_area("编辑内容", value=n.get('content', ''), key=f"edit_note_{n['id']}")
+                if new_content != n.get('content', ''):
+                    db.upsert_note(note_id=n['id'], title=n.get('title', ''), content=new_content)
+                    st.toast("已更新")
+
+
+def _render_links(db: KnowledgeDB):
+    """自定义链接管理。"""
+    import json as _j
+    import os as _os
+    links_file = _os.path.join(_os.path.dirname(__file__), 'data', 'custom_links.json')
+    if _os.path.exists(links_file):
+        with open(links_file, 'r', encoding='utf-8') as f:
+            links = _j.load(f)
+    else:
+        links = []
+
+    st.markdown("### 🔗 学习链接")
+    for i, link in enumerate(links):
+        st.markdown(f"- [{link['name']}]({link['url']})  `{link.get('desc', '')}`")
+        if st.button("🗑", key=f"del_link_{i}"):
+            links.pop(i)
+            with open(links_file, 'w', encoding='utf-8') as f:
+                _j.dump(links, f, ensure_ascii=False, indent=2)
+            st.rerun()
+
+    with st.expander("➕ 添加链接"):
+        l_name = st.text_input("名称", key="new_link_name", placeholder="B站-小马哥公基")
+        l_url = st.text_input("URL", key="new_link_url", placeholder="https://...")
+        l_desc = st.text_input("备注", key="new_link_desc")
+        if st.button("添加") and l_name and l_url:
+            links.append({'name': l_name, 'url': l_url, 'desc': l_desc})
+            _os.makedirs(_os.path.dirname(links_file), exist_ok=True)
+            with open(links_file, 'w', encoding='utf-8') as f:
+                _j.dump(links, f, ensure_ascii=False, indent=2)
+            st.rerun()
 
 
 def _render_learning_advice(wrong_qs: list[dict], db: KnowledgeDB):
@@ -704,13 +1047,10 @@ def render_middle_panel(db: KnowledgeDB):
 
     with tab1:
         _render_module_overview(db)
-
     with tab2:
         _render_weak_points(db)
-
     with tab3:
         _render_trend_analysis(db)
-
     with tab4:
         _render_error_distribution(db)
 
@@ -833,9 +1173,109 @@ def _render_weak_points(db: KnowledgeDB):
         })
     st.dataframe(pd.DataFrame(df_data), use_container_width=True, hide_index=True)
 
+    # 知识点详情（点击查看跨考表现）
+    st.markdown("---")
+    st.markdown("### 🔍 知识点详情")
+    selected_kp = st.selectbox(
+        "选择知识点查看跨考表现",
+        [w['point_name'] for w in weak],
+        key="kp_detail_select"
+    )
+    if selected_kp:
+        details = db.get_kp_cross_exam_detail(selected_kp)
+        if details:
+            correct_count = sum(1 for d in details if d['is_correct'])
+            total_count = len(details)
+            exams_involved = len(set(d['exam_name'] for d in details))
+            st.markdown(
+                f"**{selected_kp}**：{exams_involved} 场考试中出现 {total_count} 次，"
+                f"正确 {correct_count} 次（{correct_count/max(total_count,1):.0%}）"
+            )
+            # 时间线
+            dates = []
+            results = []
+            for d in details:
+                exam_short = f"{d['exam_date']} {d['exam_name'][:15]}"
+                dates.append(exam_short)
+                results.append(1 if d['is_correct'] else 0)
+
+            if len(dates) > 1:
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=dates, y=results,
+                    mode='lines+markers',
+                    marker=dict(size=12, color=['#4caf50' if r else '#e53935' for r in results]),
+                    line=dict(color='#999', dash='dot'),
+                ))
+                fig.update_layout(
+                    title=f'{selected_kp} 跨考表现',
+                    yaxis=dict(tickvals=[0, 1], ticktext=['❌ 错误', '✅ 正确'], range=[-0.3, 1.3]),
+                    height=250, margin=dict(l=20, r=20, t=40, b=80),
+                )
+                fig.update_xaxes(tickangle=-30)
+                st.plotly_chart(fig, use_container_width=True)
+
+            for d in details:
+                icon = '✅' if d['is_correct'] else '❌'
+                st.caption(
+                    f"{icon} {d['exam_date']} | {d['source']} | "
+                    f"你的：{_index_to_letter(d.get('your_answer'))} → "
+                    f"正确：{_index_to_letter(d.get('correct_answer'))} | "
+                    f"用时：{d.get('time_spent_sec', '-')}秒 | "
+                    f"全站：{(d.get('global_correct_ratio', 0) or 0) * 100:.1f}%"
+                )
+        else:
+            st.caption("暂无跨考数据")
+
 
 def _render_trend_analysis(db: KnowledgeDB):
-    """渲染历史趋势分析。"""
+    """渲染历史趋势分析 + 考试对比。"""
+    # ── 两场考试对比 ──
+    exams = db.get_exam_records()
+    if len(exams) >= 2:
+        st.markdown("### 📊 两场考试对比")
+        exam_names = [f"{e['exam_date']} {e['exam_name'][:20]}" for e in exams]
+        col_a, col_b = st.columns(2)
+        with col_a:
+            idx1 = st.selectbox("考试 A", range(len(exam_names)), format_func=lambda i: exam_names[i], key="cmp_a")
+        with col_b:
+            idx2 = st.selectbox("考试 B", range(len(exam_names)), format_func=lambda i: exam_names[i],
+                                index=min(1, len(exam_names)-1), key="cmp_b")
+        if idx1 != idx2:
+            e1, e2 = exams[idx1], exams[idx2]
+            from collections import defaultdict
+            import json as _j, os as _os
+            def _mod_acc(rp):
+                if not _os.path.exists(rp): return {}
+                with open(rp, 'r', encoding='utf-8') as f:
+                    data = _j.load(f)
+                qs = data if isinstance(data, list) else data.get('questions',[])
+                mods = defaultdict(lambda: [0,0])
+                for q in qs:
+                    if not isinstance(q, dict): continue
+                    kps = q.get('keypoints',[])
+                    names = [k.get('name','') for k in kps]
+                    if not names: continue
+                    from utils.analysis import classify_module
+                    mm = classify_module(list(set(names)))
+                    mod = next(iter(mm.keys()), '其他') if mm else '其他'
+                    mods[mod][0] += 1
+                    if q.get('status') == 1: mods[mod][1] += 1
+                return {m: c1/max(c0,1) for m,(c0,c1) in mods.items() if c0>0}
+
+            acc1, acc2 = _mod_acc(e1['report_path']), _mod_acc(e2['report_path'])
+            all_mods = sorted(set(list(acc1.keys()) + list(acc2.keys())))
+            if all_mods:
+                rows = []
+                for mod in all_mods:
+                    a1, a2 = acc1.get(mod, 0), acc2.get(mod, 0)
+                    delta = a2 - a1
+                    icon = '📈' if delta > 0.03 else ('📉' if delta < -0.03 else '➡️')
+                    rows.append({'模块': mod, f'{e1["exam_name"][:10]}': f'{a1:.0%}',
+                                 f'{e2["exam_name"][:10]}': f'{a2:.0%}', '变化': f'{icon} {delta:+.0%}'})
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    # ── 趋势分析 ──
     all_points = db.get_all_knowledge_points()
 
     if not all_points:
@@ -1030,12 +1470,86 @@ def _render_error_distribution(db: KnowledgeDB):
 # ======================== 右栏：AI 聊天 ========================
 
 def render_right_panel(db: KnowledgeDB):
-    """渲染右栏：AI 聊天。"""
-    st.markdown('<div class="main-header">🤖 AI 备考顾问</div>', unsafe_allow_html=True)
+    """渲染 AI 顾问。"""
+    # 聊天气泡 CSS
+    st.markdown("""
+    <style>
+    .chat-row { display: flex; margin: 0.5rem 0; }
+    .chat-row.user { justify-content: flex-end; }
+    .chat-bubble { max-width: 80%; padding: 0.6rem 1rem; border-radius: 1.2rem; font-size: 0.9rem; line-height: 1.5; }
+    .chat-bubble.assistant { background: #f0f2f6; border-bottom-left-radius: 0.3rem; }
+    .chat-bubble.user { background: #1a73e8; color: #fff; border-bottom-right-radius: 0.3rem; }
+    </style>
+    """, unsafe_allow_html=True)
 
-    # 初始化聊天历史
-    if 'chat_history' not in st.session_state:
-        st.session_state.chat_history = _load_chat_history()
+    # 初始化聊天数据（多会话）
+    if 'chat_data' not in st.session_state:
+        st.session_state.chat_data = _load_chat_data()
+
+    # 会话选择器
+    data = st.session_state.chat_data
+    convs = data.get('conversations', [])
+    conv = _current_conv(data)
+    conv_names = [c['name'] for c in convs]
+    current_idx = conv_names.index(conv['name']) if conv['name'] in conv_names else 0
+
+    col_c1, col_c2, col_c3 = st.columns([2.5, 1, 1])
+    with col_c1:
+        new_idx = st.selectbox("会话", range(len(convs)), format_func=lambda i: convs[i]['name'],
+                               index=current_idx, key="conv_selector", label_visibility="collapsed")
+        if new_idx != current_idx:
+            for c in convs: c['active'] = False
+            convs[new_idx]['active'] = True
+            st.rerun()
+    with col_c2:
+        new_name = st.text_input("新建", key="new_conv_name", placeholder="会话名", label_visibility="collapsed")
+        if new_name and st.button("+", key="add_conv"):
+            import time as _t
+            for c in convs: c['active'] = False
+            convs.append({"id": f"conv_{int(_t.time())}", "name": new_name, "messages": [], "active": True})
+            _save_chat_data(data)
+            st.rerun()
+    with col_c3:
+        if len(convs) > 1 and st.button("🗑", key="del_conv"):
+            convs.remove(conv)
+            if convs: convs[-1]['active'] = True
+            _save_chat_data(data)
+            st.rerun()
+
+    # ── AI 生成题组 ──
+    with st.expander("🎯 AI 生成针对性题组", expanded=False):
+        gen_module = st.selectbox("模块", ["政治理论","常识判断","言语理解与表达","数量关系","判断推理","资料分析"], key="gen_mod_ai")
+        gen_count = st.slider("题量", 3, 10, 5, key="gen_count_ai")
+        if st.button("生成题组（~¥0.01）", key="gen_practice_ai", disabled=not _llm_available()):
+            with st.spinner("AI 出题中..."):
+                from utils.llm import _get_client, _load_llm_config
+                prompt = (
+                    f"你是公考行测命题专家。生成{gen_count}道{gen_module}练习题。"
+                    f"输出JSON数组：[{{'content':'题干','options':['A...','B...','C...','D...'],'answer':'0','explanation':'解析'}}]"
+                    f"题干加解析不超过150字/题。"
+                )
+                try:
+                    cfg = _load_llm_config()
+                    client = _get_client()
+                    resp = client.chat.completions.create(
+                        model=cfg['model'], messages=[{'role':'user','content':prompt}],
+                        max_tokens=1200, temperature=0.7,
+                        response_format={'type':'json_object'},
+                    )
+                    import json as _j2
+                    result = _j2.loads(resp.choices[0].message.content)
+                    items = result if isinstance(result, list) else result.get('items', result.get('questions', []))
+                    for qi, item in enumerate(items[:gen_count], 1):
+                        with st.container(border=True):
+                            st.markdown(f"**{qi}.** {item.get('content','')}")
+                            for oi, opt in enumerate(item.get('options',[])[:4]):
+                                st.caption(f"{chr(65+oi)}. {opt}")
+                            with st.expander("查看答案"):
+                                st.success(f"答案：{chr(65+int(item.get('answer','0')))} — {item.get('explanation','')}")
+                except Exception as e:
+                    st.error(f"生成失败：{e}")
+
+    st.markdown("---")
 
     # 快捷提问
     with st.expander("💡 快捷提问", expanded=False):
@@ -1043,11 +1557,10 @@ def render_right_panel(db: KnowledgeDB):
             "哪个模块最近下滑最严重？",
             "帮我制定本周薄弱点攻克计划",
             "分析我的主要错误类型及改进建议",
-            "我的资料分析水平如何？有什么提升建议？",
         ]
-        cols = st.columns(2)
+        cols = st.columns(3)
         for i, qq in enumerate(quick_questions):
-            with cols[i % 2]:
+            with cols[i]:
                 if st.button(qq, key=f"quick_{i}", use_container_width=True):
                     _handle_chat(db, qq)
 
@@ -1056,40 +1569,51 @@ def render_right_panel(db: KnowledgeDB):
     if user_input:
         _handle_chat(db, user_input)
 
-    # 分隔历史与当前
-    history = st.session_state.chat_history
-    if len(history) > 8:
-        # 折叠旧对话
-        old_count = len(history) - 6
-        with st.expander(f"📜 历史对话（{old_count} 条消息）", expanded=False):
-            for msg in history[:old_count]:
-                with st.chat_message(msg['role']):
-                    st.markdown(msg['content'])
-        # 显示最近 6 条
-        for msg in history[old_count:]:
-            with st.chat_message(msg['role']):
-                st.markdown(msg['content'])
-    else:
-        for msg in history:
-            with st.chat_message(msg['role']):
-                st.markdown(msg['content'])
+    # 气泡对话
+    history = conv.get('messages', [])
+    show_n = min(6, len(history))
+    recent = history[-show_n:] if history else []
+    old = history[:-show_n] if len(history) > show_n else []
+
+    if old:
+        with st.expander(f"📜 历史消息（{len(old)} 条）", expanded=False):
+            for msg in old:
+                role = msg['role']
+                align = 'user' if role == 'user' else 'assistant'
+                cls = 'user' if role == 'user' else 'assistant'
+                st.markdown(
+                    f'<div class="chat-row {align}"><div class="chat-bubble {cls}">{msg["content"]}</div></div>',
+                    unsafe_allow_html=True
+                )
+
+    for msg in recent:
+        role = msg['role']
+        align = 'user' if role == 'user' else 'assistant'
+        cls = 'user' if role == 'user' else 'assistant'
+        st.markdown(
+            f'<div class="chat-row {align}"><div class="chat-bubble {cls}">{msg["content"]}</div></div>',
+            unsafe_allow_html=True
+        )
 
 
 def _handle_chat(db: KnowledgeDB, user_query: str):
-    """处理一轮对话。"""
+    """处理一轮对话（存入当前会话）。"""
+    data = st.session_state.get('chat_data', {'conversations': []})
+    conv = _current_conv(data)
+
     # 添加用户消息
-    st.session_state.chat_history.append({
-        'role': 'user',
-        'content': user_query,
-    })
+    conv['messages'].append({'role': 'user', 'content': user_query})
 
     # 获取知识库上下文
     db_context = db.get_db_context_for_chat()
+    exam_ctx = st.session_state.get('current_exam_context', '')
+    if exam_ctx:
+        db_context = exam_ctx + '\n\n' + db_context
 
     # 构建对话历史
     conv_history = [
         {'role': m['role'], 'content': m['content']}
-        for m in st.session_state.chat_history[:-1]  # 不包括刚添加的
+        for m in conv['messages'][:-1]
     ]
 
     # 调用 LLM
@@ -1097,43 +1621,117 @@ def _handle_chat(db: KnowledgeDB, user_query: str):
         response = chat_with_context(user_query, db_context, conv_history)
 
     # 添加 AI 回复
-    st.session_state.chat_history.append({
-        'role': 'assistant',
-        'content': response,
-    })
+    conv['messages'].append({'role': 'assistant', 'content': response})
 
-    # 持久化保存
-    _save_chat_history(st.session_state.chat_history)
+    # 持久化
+    _save_chat_data(data)
 
-    # 刷新界面
+    # 刷新
     st.rerun()
 
 
 # ======================== 主入口 ========================
 
 def main():
-    """主函数：三栏布局。"""
-    st.markdown("""
-    <div style="text-align: center; padding: 1rem 0 2rem 0;">
-        <h1 style="color: #1a73e8; margin-bottom: 0;">📝 粉笔模考复盘助手</h1>
-        <p style="color: #888; font-size: 0.9rem;">基于认知科学的行测/公基模考数据分析工具</p>
+    """主函数：标签页布局。"""
+    # 暗色模式
+    if 'dark_mode' not in st.session_state:
+        st.session_state['dark_mode'] = False
+
+    with st.sidebar:
+        st.markdown("### ⚙️ 设置")
+        dark = st.toggle("🌙 暗色模式", value=st.session_state['dark_mode'])
+        if dark != st.session_state['dark_mode']:
+            st.session_state['dark_mode'] = dark
+            st.rerun()
+
+    dark_css = """
+    <style>
+        .stApp { background-color: #1a1a2e; color: #e0e0e0; }
+        .st-expander { background-color: #16213e; }
+        .st-bq { color: #e0e0e0; }
+        .module-card { background: #16213e; }
+    </style>
+    """ if st.session_state['dark_mode'] else ""
+
+    st.markdown(f"""
+    <div style="text-align: center; padding: 0.5rem 0 1rem 0;">
+        <h2 style="color: #1a73e8; margin-bottom: 0;">📝 粉笔模考复盘助手</h2>
     </div>
+    {dark_css}
     """, unsafe_allow_html=True)
 
-    # 初始化数据库
     db = get_db()
 
-    # 三栏布局
-    left, middle, right = st.columns([1, 1.2, 0.8], gap="medium")
+    # ── 仪表盘 ──
+    exams = db.get_exam_records()
+    if exams:
+        total_q = sum(e['total_questions'] or 0 for e in exams)
+        total_c = sum(e['correct_questions'] or 0 for e in exams)
+        total_time = sum(e['total_time_sec'] or 0 for e in exams)
+        acc = total_c / max(total_q, 1)
+        recent = sorted(exams, key=lambda e: e['exam_date'] or '')[-3:]
+        delta_str = ''
+        if len(recent) >= 2:
+            ra = [e['correct_questions']/max(e['total_questions'],1) for e in recent if e['total_questions']]
+            if len(ra) >= 2:
+                delta = ra[-1] - ra[-2]
+                delta_str = f" {'📈' if delta>0.02 else '📉' if delta<-0.02 else '➡️'}{delta:+.1%}"
 
-    with left:
+        c1, c2, c3, c4, c5, c6 = st.columns([1, 1, 1.2, 1, 0.6, 0.6])
+        c1.metric("📋 模考", len(exams))
+        c2.metric("📝 题目", total_q)
+        c3.metric("✅ 正确率", f"{acc:.1%}{delta_str}")
+        c4.metric("⏱ 用时", f"{int(total_time//3600)}h{int(total_time%3600//60)}m")
+        with c5:
+            if st.button("📥 抓取", key="dash_fetch_btn", use_container_width=True):
+                st.session_state['show_fetch'] = not st.session_state.get('show_fetch', False)
+        with c6:
+            import shutil as _su
+            bpath = os.path.join(os.path.dirname(__file__), 'data', 'backup.zip')
+            try:
+                _su.make_archive(bpath[:-4], 'zip', os.path.join(os.path.dirname(__file__), 'data'), 'knowledge_base.db')
+                with open(bpath, 'rb') as bf:
+                    st.download_button("💾", bf, "kb_backup.zip", key="dash_bkup")
+            except Exception:
+                pass
+
+    if st.session_state.get('show_fetch'):
+        with st.container(border=True):
+            col_a, col_b = st.columns([2, 1])
+            with col_a:
+                ei = st.text_input("URL 或 Exam Key", placeholder="https://spa.fenbi.com/...", key="dfk")
+            with col_b:
+                ci = st.text_input("Cookie（可选）", type="password", key="dck")
+            if st.button("🚀 开始抓取并入库", key="dfb", disabled=not ei):
+                from fetch import fetch_and_analyze
+                r = fetch_and_analyze(ei, ci)
+                if r['success']:
+                    st.success(f"✅ {r['exam_name'][:30]} — {r['total_q']}题，正确{r['correct_q']}题")
+                    st.session_state['show_fetch'] = False
+                else:
+                    st.error(r.get('error', '抓取失败'))
+
+    # ── 标签页主区域 ──
+    tabs = st.tabs([
+        "📋 复盘报告", "📊 知识洞察", "📖 错题本",
+        "🤖 AI 顾问", "📝 笔记链接"
+    ])
+
+    with tabs[0]:
         render_left_panel(db)
-
-    with middle:
+    with tabs[1]:
         render_middle_panel(db)
-
-    with right:
+    with tabs[2]:
+        # 错题本：默认使用最近一份报告
+        last_rp = exams[0]['report_path'] if exams else ''
+        _render_wrong_q_bank(db, last_rp)
+    with tabs[3]:
         render_right_panel(db)
+    with tabs[4]:
+        _render_notes(db)
+        st.markdown("---")
+        _render_links(db)
 
 
 if __name__ == '__main__':

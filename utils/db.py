@@ -130,6 +130,17 @@ class KnowledgeDB:
         except sqlite3.OperationalError:
             pass  # 列已存在
 
+        # 笔记表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT DEFAULT '',
+                content TEXT DEFAULT '',
+                created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+            )
+        """)
+
         # 兼容已有数据库：添加 exam_type 列
         try:
             cursor.execute("ALTER TABLE exam_records ADD COLUMN exam_type TEXT DEFAULT '行测'")
@@ -417,6 +428,45 @@ class KnowledgeDB:
             (new_date, report_path)
         )
         self.conn.commit()
+
+    def get_kp_cross_exam_detail(self, kp_name: str) -> list[dict]:
+        """获取某知识点在所有考试中的出题详情。"""
+        import json as _json
+        import os as _os
+
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT report_path, exam_name, exam_date FROM exam_records ORDER BY exam_date")
+        exams = cursor.fetchall()
+
+        results = []
+        for rp, ename, edate in exams:
+            if not _os.path.exists(rp):
+                continue
+            try:
+                with open(rp, 'r', encoding='utf-8') as f:
+                    data = _json.load(f)
+                qs = data if isinstance(data, list) else data.get('questions', [])
+                for q in qs:
+                    if not isinstance(q, dict):
+                        continue
+                    kps = q.get('keypoints', [])
+                    if any(kp.get('name', '') == kp_name for kp in kps):
+                        qk = q.get('key', '')
+                        qa = self.get_question_by_key(qk)
+                        results.append({
+                            'exam_name': ename, 'exam_date': edate,
+                            'question_key': qk, 'source': q.get('source', ''),
+                            'your_answer': qa.get('your_answer','') if qa else q.get('your_answer',''),
+                            'correct_answer': qa.get('correct_answer','') if qa else q.get('correct_answer',''),
+                            'is_correct': qa.get('is_correct', False) if qa else (q.get('status') == 1),
+                            'time_spent_sec': qa.get('time_spent_sec') if qa else q.get('time_spent_sec'),
+                            'global_correct_ratio': qa.get('global_correct_ratio') if qa else 0,
+                        })
+            except (_json.JSONDecodeError, IOError, OSError):
+                continue
+
+        results.sort(key=lambda x: x.get('exam_date', ''))
+        return results
 
     def get_exam_records(self) -> list[dict]:
         """获取所有模考记录，按日期降序。"""
@@ -721,6 +771,30 @@ class KnowledgeDB:
                     "UPDATE knowledge_points SET error_type_distribution = ? WHERE full_label = ?",
                     (_json.dumps(dist, ensure_ascii=False), full_label)
                 )
+
+    # ======================== 笔记操作 ========================
+
+    def get_all_notes(self) -> list[dict]:
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("SELECT * FROM notes ORDER BY created_at DESC")
+            return [dict(r) for r in cursor.fetchall()]
+        except sqlite3.OperationalError:
+            return []
+
+    def upsert_note(self, note_id: int = None, title: str = '', content: str = '') -> int:
+        cursor = self.conn.cursor()
+        if note_id:
+            cursor.execute("UPDATE notes SET title=?, content=?, updated_at=datetime('now','localtime') WHERE id=?",
+                           (title, content, note_id))
+        else:
+            cursor.execute("INSERT INTO notes (title, content) VALUES (?, ?)", (title, content))
+        self.conn.commit()
+        return note_id or cursor.lastrowid
+
+    def delete_note(self, note_id: int):
+        self.conn.cursor().execute("DELETE FROM notes WHERE id=?", (note_id,))
+        self.conn.commit()
 
     # ======================== 统计查询 ========================
 
