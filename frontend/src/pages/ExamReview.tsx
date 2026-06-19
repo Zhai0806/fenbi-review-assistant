@@ -5,6 +5,9 @@ import { OrderedListOutlined, FileTextOutlined, SearchOutlined } from "@ant-desi
 import api from "../api/client";
 
 const MOD_ORDER = ["政治理论", "常识判断", "言语理解与表达", "数量关系", "判断推理", "资料分析"];
+const LOGIC_MODS = ["言语理解与表达", "数量关系", "判断推理", "资料分析"];
+const MEMORY_MODS = ["政治理论", "常识判断"];
+const ALL_CAT_MODS = [...LOGIC_MODS, ...MEMORY_MODS];
 const errorTypes = ["计算失误", "公式用错", "概念混淆", "审题不清", "时间不足蒙的", "记忆盲区", "放弃", "其他"];
 
 function idxToL(i: string | number) {
@@ -22,6 +25,7 @@ export default function ExamReview() {
   const [pDiags, setPDiags] = useState<any[]>([]);
   const [diagnosing, setDiagnosing] = useState(false);
   const [viewMode, setViewMode] = useState<"review" | "diagnose">("review");
+  const [catMode, setCatMode] = useState<"logic" | "memory">("logic");
   const qRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const diagRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
@@ -87,6 +91,9 @@ export default function ExamReview() {
           <Button icon={<SearchOutlined />} type={viewMode === "diagnose" ? "primary" : "default"} onClick={() => setViewMode("diagnose")}>
             诊断总览{pDiags.length > 0 && <Tag color="red" style={{ marginLeft: 4 }}>{pDiags.length}</Tag>}
           </Button>
+          <Button type={catMode === "memory" ? "primary" : "default"} onClick={() => setCatMode(catMode === "logic" ? "memory" : "logic")}>
+            {catMode === "logic" ? "📐 逻辑模块" : "📚 知识模块"}
+          </Button>
           <Button loading={diagnosing} onClick={runDiagnose} size="small">{pDiags.length > 0 ? "重新诊断" : "🤖 AI诊断"}</Button>
         </Space>
       </div>
@@ -99,7 +106,7 @@ export default function ExamReview() {
             <Button type="primary" onClick={runDiagnose} loading={diagnosing}>🤖 开始 AI 诊断</Button>
           </div>
         ) : (
-          MOD_ORDER.map(mod => {
+          (catMode === "logic" ? LOGIC_MODS : MEMORY_MODS).map(mod => {
             const md = pDiags.filter((d: any) => qs.find((q: any) => q.key === d.question_key)?.module === mod);
             if (!md.length) return null;
             return (
@@ -150,7 +157,7 @@ export default function ExamReview() {
       )}
 
       {/* 题目浏览 */}
-      {viewMode === "review" && MOD_ORDER.map(mod => {
+      {viewMode === "review" && (catMode === "logic" ? LOGIC_MODS : MEMORY_MODS).map(mod => {
         const mq = modQs[mod] || [];
         if (!mq.length) return null;
         if (mod === "资料分析") {
@@ -187,7 +194,7 @@ export default function ExamReview() {
         <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 1000, background: "#fff", borderTop: "2px solid #1a73e8", padding: "16px 24px", maxHeight: "50vh", overflow: "auto",
           transform: showCard ? "translateY(0)" : "translateY(100%)", transition: "transform 0.3s ease-in-out", boxShadow: "0 -4px 20px rgba(0,0,0,0.15)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}><strong>答题卡</strong><span style={{ cursor: "pointer", color: "#999" }} onClick={() => setShowCard(false)}>✕ 收起</span></div>
-        {MOD_ORDER.map(mod => {
+        {(catMode === "logic" ? LOGIC_MODS : MEMORY_MODS).map(mod => {
           const mq2 = modQs[mod] || [];
           if (!mq2.length) return null;
           if (mod === "资料分析") {
@@ -226,7 +233,7 @@ export default function ExamReview() {
         </div>
         {showDiagCard && (<div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 1000, background: "#fff", borderTop: "2px solid #e53935", padding: "16px 24px", maxHeight: "50vh", overflow: "auto", boxShadow: "0 -4px 20px rgba(0,0,0,0.15)" }}>
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}><strong>诊断错题卡</strong><span style={{ cursor: "pointer", color: "#999" }} onClick={() => setShowDiagCard(false)}>✕ 收起</span></div>
-          {MOD_ORDER.map(mod => {
+          {(catMode === "logic" ? LOGIC_MODS : MEMORY_MODS).map(mod => {
             const md = pDiags.filter((d: any) => qs.find((q: any) => q.key === d.question_key)?.module === mod);
             if (!md.length) return null;
             return (<div key={mod} style={{ marginBottom: 8 }}>

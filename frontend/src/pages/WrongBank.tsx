@@ -19,6 +19,8 @@ export default function WrongBank() {
   const [submitted, setSubmitted] = useState(false);
   const [startTime, setStartTime] = useState(0);
   const [elapsed, setElapsed] = useState(0);
+  const [confidence, setConfidence] = useState<number>(3);
+  const [calibration, setCalibration] = useState<any[]>([]);
   const timer = useRef<any>(null);
 
   useEffect(() => {
@@ -40,15 +42,27 @@ export default function WrongBank() {
     setSubmitted(true);
     const q = questions[idx];
     const correct = String(q.correct_answer);
-    if (String(choice) === correct) setScore((s) => s + 1);
+    const isRight = String(choice) === correct;
+    if (isRight) setScore((s) => s + 1);
     clearInterval(timer.current);
-    message.info(String(choice) === correct ? "✅ 正确!" : `❌ 正确是 ${idxToLetter(correct)}`);
+    // 记录校准数据
+    setCalibration(prev => [...prev, { conf: confidence, correct: isRight, q: q.source }]);
+    message.info(isRight ? "✅ 正确!" : `❌ 正确是 ${idxToLetter(correct)}`);
   };
 
   const next = () => {
     setChoice(null); setSubmitted(false);
     if (idx + 1 >= questions.length) {
-      message.success(`完成! ${score}/${questions.length} 正确 (${questions.length > 0 ? (score / questions.length * 100).toFixed(0) : 0}%)`);
+      message.success(`完成! ${score}/${questions.length} (${questions.length > 0 ? (score / questions.length * 100).toFixed(0) : 0}%)`);
+      if (calibration.length > 0) {
+        setTimeout(() => {
+          const msg = [
+            highConfWrong > 0 ? `⚠️ ${highConfWrong}道你很有把握但做错了——这是最危险的盲区` : "",
+            lowConfRight > 0 ? `💡 ${lowConfRight}道你没把握但做对了——说明你低估了自己` : "",
+          ].filter(Boolean).join("；");
+          if (msg) message.warning(msg, 10);
+        }, 500);
+      }
     } else {
       setIdx((i) => i + 1);
     }
@@ -56,6 +70,10 @@ export default function WrongBank() {
 
   const q = questions[idx];
   const done = idx >= questions.length || !q;
+
+  // 校准统计
+  const highConfWrong = calibration.filter(c => c.conf >= 4 && !c.correct).length;
+  const lowConfRight = calibration.filter(c => c.conf <= 2 && c.correct).length;
 
   return (
     <div>
@@ -90,7 +108,19 @@ export default function WrongBank() {
             </div>
           )}
 
-          <Space style={{ marginTop: 16 }}>
+          <Space style={{ marginTop: 16 }} direction="vertical" style={{ width: "100%" }}>
+            {!submitted && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 12, color: "#999" }}>你有多少把握？</span>
+                {[1, 2, 3, 4, 5].map(n => (
+                  <span key={n} onClick={() => setConfidence(n)} style={{
+                    cursor: "pointer", padding: "2px 8px", borderRadius: 4, fontSize: 13,
+                    background: confidence === n ? "#1a73e8" : "#f0f0f0",
+                    color: confidence === n ? "#fff" : "#666",
+                  }}>{n}</span>
+                ))}
+              </div>
+            )}
             {!submitted ? (
               <Button type="primary" onClick={submit} disabled={!choice}>提交</Button>
             ) : (

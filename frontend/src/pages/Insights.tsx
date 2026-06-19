@@ -1,143 +1,128 @@
 import { useEffect, useState } from "react";
-import { Table, Tabs, Select, Tag, Spin } from "antd";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
+import { Card, Table, Tag, Spin, Button, Tabs } from "antd";
+import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import api from "../api/client";
 
-const COLORS = ["#1a73e8", "#4caf50", "#ff9800", "#e53935", "#9c27b0", "#00bcd4", "#795548", "#607d8b"];
+const LOGIC_MODS = ["言语理解与表达", "数量关系", "判断推理", "资料分析"];
+const MEMORY_MODS = ["政治理论", "常识判断"];
+const COLORS: Record<string, string> = { "言语理解与表达": "#1a73e8", "数量关系": "#e53935", "判断推理": "#4caf50", "资料分析": "#ff9800", "政治理论": "#9c27b0", "常识判断": "#00bcd4" };
 
 export default function Insights() {
   const [modules, setModules] = useState<any[]>([]);
-  const [weakPoints, setWeakPoints] = useState<any[]>([]);
-  const [errorDist, setErrorDist] = useState<any[]>([]);
-  const [persistent, setPersistent] = useState<any[]>([]);
   const [exams, setExams] = useState<any[]>([]);
   const [compareA, setCompareA] = useState<number | null>(null);
   const [compareB, setCompareB] = useState<number | null>(null);
   const [compareData, setCompareData] = useState<any>(null);
-  const [kpDetail, setKpDetail] = useState<any[]>([]);
-  const [kpName, setKpName] = useState("");
+  const [trendData, setTrendData] = useState<any[]>([]);
+  const [contra, setContra] = useState<any>({});
   const [loading, setLoading] = useState(true);
-  const [actionStats, setActionStats] = useState<any>({});
+  const [cat, setCat] = useState<"logic" | "memory">("logic");
+  const activeMods = cat === "logic" ? LOGIC_MODS : MEMORY_MODS;
 
   useEffect(() => {
     Promise.all([
-      api.get("/modules/summary"), api.get("/weak-points-by-type"),
-      api.get("/insights/error-distribution"), api.get("/insights/persistent-weak"), api.get("/exams"),
-      api.get("/insights/actionable-stats"),
-    ]).then(([m, w, e, p, ex, a]) => {
-      setModules(m.data); setWeakPoints(w.data); setErrorDist(e.data);
-      setPersistent(p.data); setExams(ex.data);
-      setActionStats(a.data); setLoading(false);
+      api.get("/modules/summary"), api.get("/exams"),
+      api.get("/insights/exam-trend"), api.get("/insights/contradiction"),
+    ]).then(([m, ex, t, c]) => {
+      setModules(m.data); setExams(ex.data);
+      setTrendData(t.data || []); setContra(c.data || {}); setLoading(false);
     });
   }, []);
 
-  const compare = () => {
-    if (compareA && compareB && compareA !== compareB) {
-      api.get("/insights/exams-compare", { params: { a: compareA, b: compareB } }).then((r) => setCompareData(r.data));
-    }
-  };
-
-  const loadKpDetail = () => {
-    if (kpName) api.get("/insights/kp-detail", { params: { name: kpName } }).then((r) => setKpDetail(r.data));
+  const cmp = () => {
+    if (compareA && compareB && compareA !== compareB)
+      api.get("/insights/exams-compare", { params: { a: compareA, b: compareB } }).then(r => setCompareData(r.data));
   };
 
   if (loading) return <Spin />;
 
-  const modChart = modules.filter((m: any) => m.total_q >= 3).map((m: any) => ({ name: m.module, 正确率: +(m.accuracy * 100).toFixed(1) }));
+  const modData = modules.filter((m: any) => m.total_q >= 3 && activeMods.includes(m.module));
+  const aggMods: Record<string, {total: number, correct: number}> = {};
+  modData.forEach((m: any) => {
+    if (!aggMods[m.module]) aggMods[m.module] = { total: 0, correct: 0 };
+    aggMods[m.module].total += m.total_q;
+    aggMods[m.module].correct += m.correct_q;
+  });
 
   return (
-    <div><h2>📊 知识洞察</h2>
+    <div>
+      <h2>📊 知识洞察</h2>
+      <Button type={cat === "memory" ? "primary" : "default"}
+        onClick={() => setCat(cat === "logic" ? "memory" : "logic")} style={{ marginBottom: 12 }}>
+        {cat === "logic" ? "📐 逻辑模块" : "📚 知识模块"}
+      </Button>
       <Tabs items={[
         {
-          key: "action", label: "💡 行动指南",
+          key: "trend", label: "趋势追踪",
           children: <div>
-            {/* 送分题杀手 */}
-            <h4>🔫 送分题杀手（全站正确率&gt;70%，但你做错了）</h4>
-            {actionStats.free_kills?.length > 0 ? (
-              <div>{actionStats.free_kills.map((q: any, i: number) => (
-                <div key={i} style={{ marginBottom: 4, padding: "4px 8px", background: "#fff3f3", borderRadius: 4 }}>
-                  <Tag color="red">全站{(q.global_ratio * 100).toFixed(0)}%</Tag>
-                  {q.source?.replace(/.*?第(\d+)题/, "第$1题")} | {q.kp_names?.slice(0, 2).join("、")}
-                </div>
-              ))}</div>
-            ) : <p style={{ color: "#999" }}>暂无。继续保持！</p>}
-
-            {/* 不该放弃的题 */}
-            <h4 style={{ marginTop: 20 }}>💸 不该放弃的题（用时&lt;10秒，全站&gt;50%）</h4>
-            {actionStats.should_not_give_up?.length > 0 ? (
-              <div>{actionStats.should_not_give_up.map((q: any, i: number) => (
-                <div key={i} style={{ marginBottom: 4, padding: "4px 8px", background: "#fff8e1", borderRadius: 4 }}>
-                  <Tag color="orange">全站{(q.global_ratio * 100).toFixed(0)}%</Tag>
-                  <Tag>{q.time_sec}s</Tag>
-                  {q.source?.replace(/.*?第(\d+)题/, "第$1题")} | {q.kp_names?.slice(0, 2).join("、")}
-                </div>
-              ))}</div>
-            ) : <p style={{ color: "#999" }}>暂无。</p>}
-
-            {/* 投入产出 Top5 */}
-            <h4 style={{ marginTop: 20 }}>🎯 投入产出最高知识点 Top5</h4>
-            <p style={{ color: "#666", fontSize: 13 }}>全站正确率高 + 你常错 = 最容易补的短板</p>
-            {actionStats.top_roi_kps?.map((k: any, i: number) => (
-              <div key={i} style={{ marginBottom: 4, padding: "4px 8px", background: "#e8f5e9", borderRadius: 4 }}>
-                <strong>{k.kp}</strong> — 错{k.wrong}/{k.total}题，全站正确率{(k.avg_global * 100).toFixed(0)}%
-                <span style={{ marginLeft: 8, color: "#1a73e8" }}>建议：每天做2道该类题</span>
+            <p style={{ color: "#999", fontSize: 13, marginBottom: 8 }}>
+              各模块跨考正确率变化。向上的线=进步，向下的线=退步。只统计出现≥2次的模块。
+            </p>
+            <ResponsiveContainer width="100%" height={350}>
+              <LineChart data={trendData}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                <YAxis domain={[0, 100]} tickFormatter={v => `${v}%`} />
+                <Tooltip formatter={(v: number) => `${v.toFixed(0)}%`} />
+                <Legend />
+                {activeMods.map(mod => {
+                  if (!trendData.some((d: any) => d[mod] !== undefined && d[mod] !== null)) return null;
+                  return <Line key={mod} type="monotone" dataKey={mod} stroke={COLORS[mod] || "#999"} strokeWidth={2} dot={{ r: 4 }} connectNulls />;
+                })}
+              </LineChart>
+            </ResponsiveContainer>
+            {!trendData.length && <p style={{ color: "#999" }}>需要≥2场考试才有趋势数据</p>}
+          </div>
+        },
+        {
+          key: "compare", label: "考试对比",
+          children: <div>
+            <div style={{ marginBottom: 8 }}>A：{exams.slice(0, 6).map((e: any) => <Button key={e.id} size="small" type={compareA === e.id ? "primary" : "default"} onClick={() => setCompareA(e.id)} style={{ margin: 2 }}>{e.name.slice(0, 8)}</Button>)}</div>
+            <div style={{ marginBottom: 8 }}>B：{exams.slice(0, 6).map((e: any) => <Button key={e.id} size="small" type={compareB === e.id ? "primary" : "default"} onClick={() => setCompareB(e.id)} style={{ margin: 2 }}>{e.name.slice(0, 8)}</Button>)}</div>
+            <Button size="small" type="primary" onClick={cmp} disabled={!compareA || !compareB || compareA === compareB}>对比</Button>
+            {compareData && <Table dataSource={(compareData.modules || []).filter((r: any) => activeMods.includes(r.module))} rowKey="module" size="small" style={{ marginTop: 8 }} pagination={false}
+              columns={[
+                { title: "模块", dataIndex: "module", width: 100 },
+                { title: "A", width: 50, render: (_: any, r: any) => `${(r.acc_a * 100).toFixed(0)}%` },
+                { title: "B", width: 50, render: (_: any, r: any) => `${(r.acc_b * 100).toFixed(0)}%` },
+                { title: "Δ", width: 60, render: (_: any, r: any) => <Tag color={r.delta > 0.03 ? "green" : r.delta < -0.03 ? "red" : "default"}>{`${(r.delta * 100).toFixed(0)}%`}</Tag> },
+              ]} />}
+          </div>
+        },
+        {
+          key: "contra", label: "矛盾分析",
+          children: <div>
+            {contra.principal && <div style={{ padding: 12, background: "#fff3f3", borderRadius: 8, marginBottom: 16, border: "2px solid #e53935" }}>
+              <h3 style={{ color: "#e53935", margin: 0 }}>⚡ 主要矛盾：{contra.principal}</h3>
+              <p style={{ marginTop: 8 }}>{contra.advice}</p>
+            </div>}
+            {(contra.analysis || []).map((a: any) => (
+              <div key={a.module} style={{ marginBottom: 8, padding: 8, background: a.module === contra.principal ? "#fff3f3" : "#fafafa", borderRadius: 4 }}>
+                <strong>{a.module}</strong> — 正确率 {a.accuracy}%
+                <span style={{ marginLeft: 12, color: a.gap > 10 ? "#e53935" : "#666" }}>与最强差 {a.gap}pp</span>
+                <p style={{ color: "#666", margin: "4px 0 0" }}>{a.advice}</p>
               </div>
             ))}
           </div>
         },
         {
-          key: "overview", label: "模块概览",
+          key: "overview", label: "总览",
           children: <div>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={modChart}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="name" /><YAxis domain={[0, 100]} /><Tooltip /><Bar dataKey="正确率" fill="#1a73e8" /></BarChart>
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={modData.map(m => ({ name: m.question_type || m.module, 正确率: +(m.accuracy * 100).toFixed(0) }))}>
+                <CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="name" tick={{ fontSize: 11 }} /><YAxis domain={[0, 100]} />
+                <Tooltip formatter={(v: number) => `${v}%`} />
+                <Bar dataKey="正确率" fill="#1a73e8" radius={[4, 4, 0, 0]} />
+              </BarChart>
             </ResponsiveContainer>
-            <Table dataSource={modules} rowKey="module" size="small" style={{ marginTop: 16 }}
-              columns={[{ title: "模块", dataIndex: "module" }, { title: "题数", dataIndex: "total_q", width: 80 },
-                { title: "正确率", width: 100, render: (_: any, r: any) => `${(r.accuracy * 100).toFixed(1)}%` },
-                { title: "题型", dataIndex: "question_type", width: 100 }]} />
-          </div>
-        },
-        {
-          key: "weak", label: "薄弱题型",
-          children: <Table dataSource={weakPoints} rowKey={(r: any) => r.module + r.question_type} size="small"
+            <Table dataSource={modData} rowKey={(r: any) => r.module + r.question_type} size="small" pagination={false} style={{ marginTop: 12 }}
             columns={[
-              { title: "模块", dataIndex: "module", width: 120 },
-              { title: "题型", dataIndex: "question_type", width: 100 },
-              { title: "总题数", dataIndex: "total", width: 80 },
-              { title: "错误", dataIndex: "wrong", width: 60 },
-              { title: "正确率", width: 80, render: (_: any, r: any) => `${(r.accuracy * 100).toFixed(0)}%` },
-              { title: "状态", width: 80, render: (_: any, r: any) => <Tag color={r.accuracy < 0.5 ? "red" : r.accuracy < 0.7 ? "orange" : "green"}>{r.accuracy < 0.5 ? "重点补" : r.accuracy < 0.7 ? "需强化" : "正常"}</Tag> },
+              { title: "模块", dataIndex: "module", width: 100 },
+              { title: "题型", dataIndex: "question_type", width: 100, render: (v: string) => v || "—" },
+              { title: "题数", dataIndex: "total_q", width: 60 },
+              { title: "正确率", width: 70, sorter: (a: any, b: any) => a.accuracy - b.accuracy, render: (_: any, r: any) => `${(r.accuracy * 100).toFixed(0)}%` },
             ]} />
-        },
-        {
-          key: "error-dist", label: "错误分布",
-          children: <ResponsiveContainer width="100%" height={400}>
-            <PieChart><Pie data={errorDist.filter((e: any) => e.error_type !== "其他")} dataKey="count" nameKey="error_type" cx="50%" cy="50%" outerRadius={140}
-              label={({ error_type, count }: any) => `${error_type}(${count})`}>
-              {errorDist.map((_: any, i: number) => (<Cell key={i} fill={COLORS[i % COLORS.length]} />))}</Pie><Tooltip /></PieChart>
-          </ResponsiveContainer>
-        },
-        {
-          key: "compare", label: "考试对比",
-          children: <div>
-            <Select placeholder="考试A" style={{ width: 200 }} value={compareA} onChange={setCompareA}
-              options={exams.map((e: any) => ({ value: e.id, label: e.name.slice(0, 20) }))} />
-            <Select placeholder="考试B" style={{ width: 200, marginLeft: 8 }} value={compareB} onChange={setCompareB}
-              options={exams.map((e: any) => ({ value: e.id, label: e.name.slice(0, 20) }))} />
-            <button onClick={compare} style={{ marginLeft: 8 }}>对比</button>
-            {compareData && <Table dataSource={compareData.modules} rowKey="module" size="small" style={{ marginTop: 16 }}
-              columns={[{ title: "模块", dataIndex: "module" },
-                { title: compareData.exam_a?.slice(0, 10) || "A", render: (_: any, r: any) => `${(r.acc_a * 100).toFixed(0)}%` },
-                { title: compareData.exam_b?.slice(0, 10) || "B", render: (_: any, r: any) => `${(r.acc_b * 100).toFixed(0)}%` },
-                { title: "变化", render: (_: any, r: any) => <Tag color={r.delta > 0.03 ? "green" : r.delta < -0.03 ? "red" : "default"}>{`${(r.delta * 100).toFixed(1)}%`}</Tag> }]} />}
           </div>
-        },
-        {
-          key: "persistent", label: "持续薄弱",
-          children: <Table dataSource={persistent} rowKey="point_name" size="small"
-            columns={[{ title: "知识点", dataIndex: "point_name" }, { title: "模块", dataIndex: "module", width: 100 },
-              { title: "连续错", dataIndex: "streak", width: 80 },
-              { title: "考试", render: (_: any, r: any) => r.exams?.map((e: any) => e.exam_name?.slice(0, 12)).join(" → ") }]} />
         },
       ]} />
     </div>

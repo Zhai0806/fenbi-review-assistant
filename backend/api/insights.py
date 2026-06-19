@@ -85,74 +85,118 @@ def kp_detail(name: str = Query(...), db=Depends(get_db)):
     return db.get_kp_cross_exam_detail(name)
 
 
-@router.get("/insights/actionable-stats")
-def actionable_stats(db=Depends(get_db)):
-    """实用备考统计：送分题杀手 + 不该放弃的题 + 投入产出Top3"""
+@router.get("/insights/contradiction")
+def contradiction_analysis(db=Depends(get_db)):
+    """矛盾分析：找出拖累全局的主要短板"""
     import json as _j, os as _os
     from collections import defaultdict
 
     exams = db.get_exam_records()
-    all_questions = []
-    kp_stats = defaultdict(lambda: {"wrong": 0, "total": 0, "global_sum": 0.0, "global_count": 0})
+    mod_accuracy_per_exam = []  # [{exam_name, 模块: accuracy}]
 
     for exam in exams:
         rp = exam["report_path"]
-        if not _os.path.exists(rp):
-            continue
+        if not _os.path.exists(rp): continue
         qs = db.get_questions_by_report(rp)
         with open(rp, "r", encoding="utf-8") as f:
             data = _j.load(f)
         raw_qs = data if isinstance(data, list) else data.get("questions", [])
         q_map = {q.get("key", ""): q for q in raw_qs if isinstance(q, dict)}
 
+        mod_counts = defaultdict(lambda: [0, 0])
         for qa in qs:
-            qk = qa["question_key"]
-            rq = q_map.get(qk, {})
+            rq = q_map.get(qa["question_key"], {})
             kps = rq.get("keypoints", [])
-            kp_names = [k.get("name", "") for k in kps]
-            time_sec = qa.get("time_spent_sec") or 0
-            global_ratio = qa.get("global_correct_ratio") or 0
-            is_correct = qa.get("is_correct", False)
+            names = [k.get("name", "") for k in kps]
+            from utils.analysis import classify_module
+            mm = classify_module(list(set(names))) if names else {}
+            mod = next(iter(mm.keys()), "其他") if mm else "其他"
+            mod_counts[mod][0] += 1
+            if qa.get("is_correct"): mod_counts[mod][1] += 1
 
-            all_questions.append({
-                "source": qa.get("source", ""), "is_correct": is_correct,
-                "time_sec": time_sec, "global_ratio": global_ratio,
-                "your_answer": qa.get("your_answer", ""),
-                "correct_answer": qa.get("correct_answer", ""),
-                "exam_name": exam["exam_name"], "kp_names": kp_names,
-            })
+        entry = {"name": (exam["exam_name"] or "")[:20], "date": exam["exam_date"]}
+        for mod, (t, c) in mod_counts.items():
+            if t >= 3: entry[mod] = round(c / t * 100, 1)
+        mod_accuracy_per_exam.append(entry)
 
-            for kp in kp_names:
-                kp_stats[kp]["total"] += 1
-                kp_stats[kp]["global_sum"] += global_ratio
-                kp_stats[kp]["global_count"] += 1
-                if not is_correct:
-                    kp_stats[kp]["wrong"] += 1
+    if len(mod_accuracy_per_exam) < 2:
+        return {"principal": "", "analysis": [], "advice": "需要≥2场考试才能分析"}
 
-    # 1. 送分题杀手（全站>70%但你做错了）
-    free_kills = [q for q in all_questions if not q["is_correct"] and q["global_ratio"] > 0.7]
-    free_kills.sort(key=lambda q: -q["global_ratio"])
+    # 找出整体正确率最低的模块（主要矛盾）
+    all_mods = set()
+    for m in mod_accuracy_per_exam: all_mods.update(k for k in m if k not in ("name", "date"))
 
-    # 2. 不该放弃的题（用时<10s + 全站>50% + 你做错了）
-    should_not_give_up = [q for q in all_questions if not q["is_correct"] and q["time_sec"] < 10 and q["global_ratio"] > 0.5]
-    should_not_give_up.sort(key=lambda q: -q["global_ratio"])
+    mod_avg = {}
+    for mod in all_mods:
+        vals = [m[mod] for m in mod_accuracy_per_exam if mod in m]
+        if vals: mod_avg[mod] = round(sum(vals) / len(vals), 1)
 
-    # 3. 投入产出最高知识点 Top5（错得多 + 全站正确率高 = 容易补的短板）
-    kp_roi = []
-    for kp, s in kp_stats.items():
-        if s["total"] >= 2 and s["wrong"] > 0:
-            avg_global = s["global_sum"] / max(s["global_count"], 1)
-            wrong_rate = s["wrong"] / max(s["total"], 1)
-            roi = avg_global * wrong_rate  # 全站高 + 你错得多 = 该补
-            kp_roi.append({"kp": kp, "wrong": s["wrong"], "total": s["total"],
-                           "avg_global": avg_global, "roi": roi})
-    kp_roi.sort(key=lambda x: -x["roi"])
+    sorted_mods = sorted(mod_avg.items(), key=lambda x: x[1])
+    principal = sorted_mods[0][0] if sorted_mods else ""
+
+    # 分析连锁影响：哪个模块拖累全局最严重
+    analysis = []
+    for mod, avg in sorted_mods[:4]:
+        # 计算该模块与总分的相关性
+        others_avg = sorted([(m, a) for m, a in sorted_mods if m != mod], key=lambda x: x[1])
+        improvement = others_avg[0][1] - avg if others_avg else 0
+        analysis.append({
+            "module": mod, "accuracy": avg,
+            "gap": round(improvement, 1),
+            "advice": f"该模块正确率{avg}%，与最强模块差距{round(improvement, 1)}个百分点。" + (
+                "该模块的基础能力可能影响其他模块表现，优先攻克。" if avg < 50 else
+                "该模块有较大提升空间，建议针对性训练。" if avg < 65 else
+                "该模块表现接近平均水平，保持即可。" if avg < 75 else
+                "该模块表现正常。"
+            ) if improvement > 5 else "各模块表现均衡，继续保持。"
+        })
 
     return {
-        "free_kills": free_kills[:10],
-        "should_not_give_up": should_not_give_up[:10],
-        "top_roi_kps": kp_roi[:5],
+        "principal": principal,
+        "analysis": analysis,
+        "advice": f"主要矛盾在「{principal}」，攻克它可能带来最大的整体提升。"
     }
+
+
+@router.get("/insights/exam-trend")
+def exam_trend(db=Depends(get_db)):
+    """各模块跨考正确率趋势"""
+    exams = db.get_exam_records()
+    exams_sorted = sorted(exams, key=lambda e: e["exam_date"] or "")
+
+    trend = []
+    for exam in exams_sorted:
+        rp = exam["report_path"]
+        if not os.path.exists(rp): continue
+        qs = db.get_questions_by_report(rp)
+        with open(rp, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        raw_qs = data if isinstance(data, list) else data.get("questions", [])
+        q_map = {q.get("key", ""): q for q in raw_qs if isinstance(q, dict)}
+
+        mod_acc: dict = {"date": exam["exam_date"] or "", "name": (exam["exam_name"] or "")[:12]}
+        mod_counts: dict = {}
+        for qa in qs:
+            rq = q_map.get(qa["question_key"], {})
+            kps = rq.get("keypoints", [])
+            names = [k.get("name", "") for k in kps]
+            from utils.analysis import classify_module
+            mm = classify_module(list(set(names))) if names else {}
+            mod = next(iter(mm.keys()), "其他") if mm else "其他"
+
+            if mod not in mod_counts: mod_counts[mod] = [0, 0]
+            mod_counts[mod][0] += 1
+            if qa.get("is_correct"): mod_counts[mod][1] += 1
+
+        for mod, (t, c) in mod_counts.items():
+            if t >= 3:
+                mod_acc[mod] = round(c / t * 100, 1)
+
+        trend.append(mod_acc)
+
+    # filter out empty entries
+    trend = [t for t in trend if len(t) > 2]
+    return trend
 
 
 @router.get("/insights/module-timing")
