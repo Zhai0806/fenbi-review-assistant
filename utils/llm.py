@@ -304,8 +304,11 @@ def chat_with_context(
     Returns:
         str: AI 回复
     """
-    system_prompt = f"""你是一位专业的公考备考顾问，拥有以下考生的学习数据：
+    import datetime as _dt
+    today = _dt.date.today().isoformat()
+    system_prompt = f"""你是一位专业的公考备考顾问。今天是 {today}。
 
+拥有以下考生的学习数据：
 {db_context}
 
 请基于以上数据回答考生的问题。你的建议应该：
@@ -313,6 +316,7 @@ def chat_with_context(
 2. 个性化：针对考生的薄弱环节
 3. 可操作：给出具体的学习建议和计划
 4. 鼓励性：保持积极正面的语气"""
+
 
     messages = [{"role": "system", "content": system_prompt}]
     if conversation_history:
@@ -421,15 +425,21 @@ def diagnose_error_batch(
     )
 
     system_prompt = (
-        "你是公考辅导专家。请以 JSON 格式输出诊断结果。\n"
-        "根据模块调整默认判断：\n"
-        "- 常识判断/政治理论：优先考虑「记忆盲区」，除非用时<10秒→「时间不足蒙的」\n"
-        "- 资料分析：优先「计算失误」或「公式用错」，数据找对但算错→计算失误\n"
-        "- 数量关系：优先「公式用错」或「计算失误」，思路对但算错→计算失误\n"
-        "- 言语理解与表达：优先「审题不清」或「概念混淆」，看对但选错→审题不清\n"
-        "- 判断推理：优先「概念混淆」或「审题不清」，逻辑链断裂→概念混淆\n"
-        "用时<10秒且无推理→「时间不足蒙的」；完全不会→「放弃」。\n"
-        '输出 JSON：{"items":[{"error_type":"概念混淆","confidence":0.8,"explanation":"简述理由"},...]}'
+        "你是公考行测辅导专家。请深度诊断每道错题的错误原因。\n"
+        "对每道题输出：\n"
+        "1. error_type：从「计算失误/公式用错/概念混淆/审题不清/时间不足蒙的/记忆盲区/放弃」中选一个最匹配的\n"
+        "2. specific_error：一句话具体描述错在哪（如\"混淆了环比与同比的定义\"，而非笼统的\"概念混淆\"）\n"
+        "3. explanation：详细分析——\"你选X可能是因为...但正确答案Y的原因是...两者区别在于...\"（40-100字）\n"
+        "4. confidence：0-1置信度\n\n"
+        "模块默认判断规则：\n"
+        "- 常识判断/政治理论：优先「记忆盲区」\n"
+        "- 资料分析：优先「计算失误」或「公式用错」\n"
+        "- 数量关系：优先「公式用错」或「计算失误」\n"
+        "- 言语理解与表达：优先「审题不清」或「概念混淆」\n"
+        "- 判断推理：优先「概念混淆」或「审题不清」\n"
+        "用时<10秒且无推理→「时间不足蒙的」\n\n"
+        "诊断要具体可操作——看完分析后考生能明白自己为什么错、下次怎么避免。\n"
+        '输出 JSON：{"items":[{"error_type":"概念混淆","specific_error":"混淆了环比与同比","explanation":"你选A可能是因为看到增长率就按同比算了，但题目给的是上月数据，应该用环比。同比是和去年同期比，环比是和上个月比。","confidence":0.85},...]}'
     )
 
     llm_config = _load_llm_config()
@@ -482,6 +492,63 @@ def diagnose_error_batch(
 
     # 全部失败：返回兜底
     return [{'error_type': '其他', 'confidence': 0.0, 'explanation': '诊断失败'} for _ in questions]
+
+
+def evaluate_shenlun_answer(
+    question: str = '',
+    materials: str = '',
+    answer: str = '',
+    question_type: str = '',
+    word_limit: str = '',
+    score: str = '',
+) -> dict:
+    """AI 批改申论答案。
+
+    Returns:
+        dict: {total_score, content_score, structure_score, language_score, comments, improvement}
+    """
+    system_prompt = (
+        "你是公考申论阅卷专家。请按评分标准批改答案。"
+        "申论评分维度：内容要点（是否覆盖核心得分点）、结构逻辑（层次清晰/论证有力）、"
+        "语言表达（规范/简洁/无口语）。满分100。"
+        "输出 JSON：{\"total_score\":75,\"content_score\":30,\"structure_score\":25,"
+        "\"language_score\":20,\"comments\":\"逐段点评\",\"improvement\":\"改进建议\"}"
+    )
+
+    mat_text = f"\n【给定资料】\n{materials}" if materials else ""
+    user_msg = (
+        f"题型：{question_type}，分值：{score}分，字数：{word_limit}\n"
+        f"【题目】{question}\n{mat_text}\n【考生答案】\n{answer}\n"
+        f"请批改。输出JSON。"
+    )
+
+    llm_config = _load_llm_config()
+    client = _get_client()
+
+    try:
+        r = client.chat.completions.create(
+            model=llm_config.get('model', 'deepseek-chat'),
+            messages=[
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user', 'content': user_msg},
+            ],
+            max_tokens=600, temperature=0.3,
+            response_format={'type': 'json_object'},
+        )
+        result = json.loads(r.choices[0].message.content)
+        return {
+            'total_score': int(result.get('total_score', 70)),
+            'content_score': int(result.get('content_score', 25)),
+            'structure_score': int(result.get('structure_score', 25)),
+            'language_score': int(result.get('language_score', 20)),
+            'comments': result.get('comments', ''),
+            'improvement': result.get('improvement', ''),
+        }
+    except Exception as e:
+        return {
+            'total_score': 0, 'content_score': 0, 'structure_score': 0, 'language_score': 0,
+            'comments': f'批改失败：{e}', 'improvement': '',
+        }
 
 
 def _normalize_error_type(error_type: str) -> str:

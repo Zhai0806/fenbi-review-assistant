@@ -36,6 +36,6 @@ fenbi:
 
 # 大模型调用（DeepSeek，已通过 Claude Code 环境变量注入，这里仅作占位）
 llm:
-  model: "deepseek-chat"  # DeepSeek V3，不要改成 deepseek-v4-pro（不存在）
-  base_url: "https://api.deepseek.com/v1"
+  model: "deepseek-chat"  # deepseek-chat (V3) 或 deepseek-v4-pro (推理增强)
+  base_url: "https://api.deepseek.com"
   api_key: "你的DeepSeek API Key"

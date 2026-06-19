@@ -1630,6 +1630,273 @@ def _handle_chat(db: KnowledgeDB, user_query: str):
     st.rerun()
 
 
+# ======================== 申论模式 ========================
+
+def _render_shenlun_mode(db: KnowledgeDB):
+    """申论综应模式主页面。"""
+    st.markdown("### 📝 申论综应")
+
+    tabs = st.tabs(["📋 真题练习", "📊 作答记录", "🤖 AI 批改", "📝 素材库"])
+
+    with tabs[0]:
+        _render_shenlun_practice(db)
+    with tabs[1]:
+        _render_shenlun_records(db)
+    with tabs[2]:
+        _render_shenlun_ai_correct(db)
+    with tabs[3]:
+        _render_shenlun_phrases(db)
+
+
+def _render_shenlun_practice(db: KnowledgeDB):
+    """申论真题练习页。"""
+    import json as _j
+    import os as _os
+    import time as _t
+
+    st.markdown("#### 📋 真题练习")
+    st.caption("抓取粉笔历年申论真题的材料和题目，在此作答后 AI 批改。")
+
+    # 抓取入口
+    with st.expander("📥 抓取申论真题", expanded=False):
+        sl_input = st.text_input("申论试卷 URL 或 Exam Key",
+                                 placeholder="粘贴完整URL自动提取，或只填key+手动填paperId/checkId")
+        from urllib.parse import urlparse as _up, parse_qs as _pq
+        auto_pid = auto_cid = ''
+        if 'fenbi.com' in sl_input:
+            parsed = _up(sl_input)
+            qs = _pq(parsed.query)
+            auto_pid = qs.get('paperId', [''])[0]
+            auto_cid = qs.get('checkId', [''])[0]
+            if auto_pid and auto_cid:
+                st.caption(f"✅ 自动识别：paperId={auto_pid} checkId={auto_cid}")
+        col_p, col_c = st.columns(2)
+        with col_p:
+            paper_id = st.text_input("paperId", value=auto_pid, placeholder="7736778")
+        with col_c:
+            check_id = st.text_input("checkId", value=auto_cid, placeholder="CWwT6lFuug")
+        if st.button("🚀 抓取申论题", key="sl_fetch", disabled=not sl_input or not (paper_id or auto_pid)):
+            with st.spinner("抓取中..."):
+                from fetch import fetch_shenlun_data
+                r = fetch_shenlun_data(sl_input, paper_id=paper_id, check_id=check_id)
+                if r['success']:
+                    st.success(f"✅ {r['exam_name'][:30]} — {len(r['questions'])}题，{r['materials']}份材料")
+                    st.rerun()
+                else:
+                    st.error(r.get('error', '抓取失败'))
+
+    # 选择试卷
+    import sqlite3
+    try:
+        cursor = db.conn.cursor()
+        cursor.execute("SELECT id, exam_name, exam_date FROM shenlun_exams ORDER BY exam_date DESC")
+        sl_exams = cursor.fetchall()
+    except sqlite3.OperationalError:
+        sl_exams = []
+
+    if not sl_exams:
+        st.info("暂无申论真题。请先抓取。")
+        return
+
+    exam_names = [f"{e[1][:30]} ({e[2]})" for e in sl_exams]
+    sel_idx = st.selectbox("选择试卷", range(len(exam_names)), format_func=lambda i: exam_names[i])
+    exam_id = sl_exams[sel_idx][0]
+
+    # 加载题目和材料
+    cursor.execute("SELECT * FROM shenlun_questions WHERE exam_id = ? ORDER BY sort_order", (exam_id,))
+    sl_qs = cursor.fetchall()
+    cursor.execute("SELECT * FROM shenlun_materials WHERE exam_id = ? ORDER BY sort_order", (exam_id,))
+    sl_mats = cursor.fetchall()
+
+    # 材料索引（用粉笔 ID 匹配，非 DB 自增 ID）
+    mat_by_fenbi_id = {}
+    for m in sl_mats:
+        md = dict(m)
+        fid = md.get('fenbi_id', 0)
+        if fid:
+            mat_by_fenbi_id[fid] = md
+
+    # 逐题作答（每题带自己的材料）
+    for q in sl_qs:
+        qd = dict(q)
+        qid = qd['id']
+        mat_idxs_str = qd.get('material_indexes', '')
+        mat_idxs = json.loads(mat_idxs_str) if mat_idxs_str else []
+
+        with st.expander(f"**{qd.get('question_number', '')}. {qd.get('question_type', '')}**（{qd.get('score', '')}分，{qd.get('word_limit', '不限')}字）", expanded=(qid == sl_qs[0][0])):
+            # 该题关联的材料
+            if mat_idxs:
+                for mi in mat_idxs:
+                    mat = mat_by_fenbi_id.get(mi, {})
+                    if mat:
+                        st.caption("📖 给定资料：")
+                        st.markdown(mat.get('content', '')[:5000], unsafe_allow_html=True)
+            else:
+                for m in sl_mats[:2]:
+                    st.markdown(dict(m).get('content', '')[:3000], unsafe_allow_html=True)
+
+            # 题目
+            st.markdown("---")
+            st.caption("📝 题目：")
+            from utils.llm import _strip_html
+            st.markdown(_strip_html(qd.get('content', '')))
+
+            # 已有答案
+            cursor.execute(
+                "SELECT * FROM shenlun_answers WHERE question_id = ? ORDER BY created_at DESC LIMIT 1",
+                (qid,)
+            )
+            prev_ans = cursor.fetchone()
+            prev_answer_text = dict(prev_ans).get('answer_text', '') if prev_ans else ''
+
+            answer = st.text_area(
+                "✍️ 你的答案", value=prev_answer_text,
+                height=200, key=f"sl_ans_{qid}",
+                placeholder="在此输入你的作答..."
+            )
+
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("💾 保存答案", key=f"sl_save_{qid}") and answer.strip():
+                    db.conn.execute(
+                        "INSERT INTO shenlun_answers (question_id, answer_text) VALUES (?, ?)",
+                        (qid, answer)
+                    )
+                    db.conn.commit()
+                    st.toast("✅ 已保存")
+            with col_b:
+                if st.button("🤖 AI 批改", key=f"sl_ai_{qid}", disabled=not answer.strip()):
+                    with st.spinner("AI 批改中..."):
+                        from utils.llm import evaluate_shenlun_answer
+                        eval_result = evaluate_shenlun_answer(
+                            question=qd.get('content', ''),
+                            materials=[dict(m).get('content', '')[:500] for m in sl_mats],
+                            answer=answer,
+                            question_type=qd.get('question_type', ''),
+                            word_limit=qd.get('word_limit', ''),
+                            score=qd.get('score', ''),
+                        )
+                        db.conn.execute(
+                            "INSERT INTO shenlun_evaluations (question_id, total_score, content_score, structure_score, language_score, comments, improvement) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (qid, eval_result['total_score'], eval_result['content_score'],
+                             eval_result['structure_score'], eval_result['language_score'],
+                             eval_result['comments'], eval_result['improvement'])
+                        )
+                        db.conn.commit()
+                    st.markdown(f"**总评：{eval_result['total_score']}/100**")
+                    st.markdown(f"- 内容得分：{eval_result['content_score']} | 结构得分：{eval_result['structure_score']} | 语言得分：{eval_result['language_score']}")
+                    st.markdown(f"**点评**：{eval_result['comments']}")
+                    st.markdown(f"**改进建议**：{eval_result['improvement']}")
+
+
+def _render_shenlun_records(db: KnowledgeDB):
+    """申论作答记录。"""
+    st.markdown("#### 📊 作答记录")
+    try:
+        cursor = db.conn.cursor()
+        cursor.execute("""
+            SELECT sq.question_type, sq.question_number, sq.exam_name,
+                   sa.answer_text, sa.created_at,
+                   se.total_score, se.content_score, se.structure_score, se.language_score, se.comments
+            FROM shenlun_answers sa
+            JOIN shenlun_questions sq ON sa.question_id = sq.id
+            LEFT JOIN shenlun_evaluations se ON se.question_id = sq.id
+            ORDER BY sa.created_at DESC LIMIT 20
+        """)
+        records = cursor.fetchall()
+    except sqlite3.OperationalError:
+        records = []
+
+    if not records:
+        st.info("暂无作答记录。去「真题练习」做一题吧。")
+        return
+
+    for r in records:
+        rd = dict(r)
+        with st.expander(f"{rd.get('exam_name', '')} — {rd.get('question_number', '')} {rd.get('question_type', '')} — {rd.get('created_at', '')[:10]}"):
+            st.caption(f"✍️ 作答：{rd.get('answer_text', '')[:300]}")
+            if rd.get('total_score'):
+                st.metric("AI 评分", f"{rd.get('total_score')}/100")
+                st.caption(f"内容{rd.get('content_score')} 结构{rd.get('structure_score')} 语言{rd.get('language_score')}")
+                st.caption(f"点评：{rd.get('comments', '')[:200]}")
+
+
+def _render_shenlun_ai_correct(db: KnowledgeDB):
+    """独立 AI 批改页——粘贴任意答案即可批改。"""
+    st.markdown("#### 🤖 AI 批改")
+    st.caption("粘贴题目 + 你的答案，AI 按申论评分标准批改")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        q_type = st.selectbox("题型", ["归纳概括", "综合分析", "提出对策", "贯彻执行", "文章写作"])
+        score = st.number_input("分值", 10, 50, 20)
+        word_limit = st.text_input("字数要求", "不超过300字")
+        q_content = st.text_area("题目内容", height=100, placeholder="根据给定资料X，概括...")
+    with col2:
+        materials = st.text_area("给定资料（选填）", height=100, placeholder="粘贴相关材料内容...")
+        answer = st.text_area("你的答案", height=200, placeholder="在此粘贴你的作答...")
+
+    if st.button("🤖 开始批改", type="primary", disabled=not (q_content and answer)):
+        with st.spinner("AI 批改中..."):
+            from utils.llm import evaluate_shenlun_answer
+            result = evaluate_shenlun_answer(
+                question=q_content, answer=answer, materials=materials,
+                question_type=q_type, word_limit=word_limit, score=str(score)
+            )
+        st.metric("总评", f"{result['total_score']}/100")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("内容", result['content_score'])
+        c2.metric("结构", result['structure_score'])
+        c3.metric("语言", result['language_score'])
+        st.markdown(f"**点评**：{result['comments']}")
+        st.markdown(f"**改进建议**：{result['improvement']}")
+
+
+def _render_shenlun_phrases(db: KnowledgeDB):
+    """申论素材库。"""
+    st.markdown("#### 📝 素材库")
+    st.caption("金句、模板、规范表述，积累写作素材")
+
+    # 新增
+    col_a, col_b, col_c = st.columns([2, 1, 1])
+    with col_a:
+        new_phrase = st.text_area("内容", height=60, key="sl_new_phrase", placeholder="例如：空谈误国、实干兴邦...")
+    with col_b:
+        new_tag = st.text_input("标签", key="sl_new_tag", placeholder="奋斗/实干")
+    with col_c:
+        new_cat = st.selectbox("分类", ["金句", "模板", "规范表述", "领导人讲话", "名言"], key="sl_new_cat")
+    if st.button("💾 收藏", key="sl_save_phrase") and new_phrase:
+        try:
+            db.conn.execute(
+                "INSERT INTO shenlun_phrases (content, tag, category) VALUES (?, ?, ?)",
+                (new_phrase, new_tag, new_cat)
+            )
+            db.conn.commit()
+            st.rerun()
+        except sqlite3.OperationalError:
+            st.error("素材库表未初始化，请重启应用")
+
+    # 浏览
+    try:
+        cursor = db.conn.cursor()
+        sel_cat = st.selectbox("筛选分类", ["全部", "金句", "模板", "规范表述", "领导人讲话", "名言"], key="sl_filter_cat")
+        if sel_cat == "全部":
+            cursor.execute("SELECT * FROM shenlun_phrases ORDER BY id DESC LIMIT 30")
+        else:
+            cursor.execute("SELECT * FROM shenlun_phrases WHERE category = ? ORDER BY id DESC LIMIT 30", (sel_cat,))
+        phrases = cursor.fetchall()
+    except sqlite3.OperationalError:
+        phrases = []
+
+    if not phrases:
+        st.info("暂无素材。收藏一些吧。")
+        return
+
+    for p in phrases:
+        pd = dict(p)
+        st.caption(f"**{pd.get('category', '')}** `{pd.get('tag', '')}` — {pd.get('content', '')[:200]}")
+
+
 # ======================== 主入口 ========================
 
 def main():
@@ -1712,26 +1979,47 @@ def main():
                 else:
                     st.error(r.get('error', '抓取失败'))
 
-    # ── 标签页主区域 ──
-    tabs = st.tabs([
-        "📋 复盘报告", "📊 知识洞察", "📖 错题本",
-        "🤖 AI 顾问", "📝 笔记链接"
-    ])
+    # ── 模式切换 ──
+    if 'app_mode' not in st.session_state:
+        st.session_state['app_mode'] = 'xingce'
 
-    with tabs[0]:
-        render_left_panel(db)
-    with tabs[1]:
-        render_middle_panel(db)
-    with tabs[2]:
-        # 错题本：默认使用最近一份报告
-        last_rp = exams[0]['report_path'] if exams else ''
-        _render_wrong_q_bank(db, last_rp)
-    with tabs[3]:
-        render_right_panel(db)
-    with tabs[4]:
-        _render_notes(db)
+    with st.sidebar:
+        st.markdown("### 📂 模式切换")
+        prev_mode = st.session_state['app_mode']
+        new_mode = st.radio("", ["📊 行测职测", "📝 申论综应"],
+                            index=0 if prev_mode == 'xingce' else 1,
+                            key="mode_switch")
+        mode = 'xingce' if '行测' in new_mode else 'shenlun'
+        if mode != prev_mode:
+            st.session_state['app_mode'] = mode
+            st.rerun()
+
         st.markdown("---")
-        _render_links(db)
+        st.markdown(f"当前：**{new_mode}**")
+
+    # ── 行测模式 ──
+    if st.session_state['app_mode'] == 'xingce':
+        tabs = st.tabs([
+            "📋 复盘报告", "📊 知识洞察", "📖 错题本",
+            "🤖 AI 顾问", "📝 笔记链接"
+        ])
+        with tabs[0]:
+            render_left_panel(db)
+        with tabs[1]:
+            render_middle_panel(db)
+        with tabs[2]:
+            last_rp = exams[0]['report_path'] if exams else ''
+            _render_wrong_q_bank(db, last_rp)
+        with tabs[3]:
+            render_right_panel(db)
+        with tabs[4]:
+            _render_notes(db)
+            st.markdown("---")
+            _render_links(db)
+
+    # ── 申论模式 ──
+    else:
+        _render_shenlun_mode(db)
 
 
 if __name__ == '__main__':

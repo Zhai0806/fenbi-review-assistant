@@ -127,6 +127,10 @@ MODULE_KEYWORDS = {
         "中国古代", "中国近代", "世界史", "省情",
         "天文", "气象", "节气", "民俗",
         "诉讼法", "重要事件",
+        "法律", "民法典", "刑法", "宪法", "行政法",
+        "民法", "法规", "条例", "普查", "人口",
+        "时政", "科技成就", "新年贺词", "两会",
+        "中央农村工作", "政府督查", "十四五",
     ],
     "政治理论": [
         "政治", "文件", "会议", "政策", "法律", "宪法",
@@ -1189,6 +1193,7 @@ def diagnose_report_errors(db, report_path: str) -> dict:
                     error_type=diag.get('error_type', '其他'),
                     confidence=diag.get('confidence', 0.0),
                     explanation=diag.get('explanation', ''),
+                    specific_error=diag.get('specific_error', ''),
                 )
                 diagnosed += 1
         except Exception:

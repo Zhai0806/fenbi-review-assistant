@@ -141,6 +141,97 @@ class KnowledgeDB:
             )
         """)
 
+        # 申论 - 试卷
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS shenlun_exams (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                exam_name TEXT, exam_date TEXT,
+                total_score INTEGER DEFAULT 100,
+                created_at TEXT DEFAULT (datetime('now', 'localtime'))
+            )
+        """)
+
+        # 申论 - 给定资料
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS shenlun_materials (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                exam_id INTEGER, sort_order INTEGER DEFAULT 0,
+                content TEXT, source_label TEXT,
+                fenbi_id INTEGER DEFAULT 0
+            )
+        """)
+
+        # 申论 - 题目
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS shenlun_questions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                exam_id INTEGER, sort_order INTEGER DEFAULT 0,
+                question_number TEXT, question_type TEXT,
+                content TEXT, score INTEGER DEFAULT 15,
+                word_limit TEXT DEFAULT '不限',
+                exam_name TEXT, reference_answer TEXT DEFAULT '',
+                material_indexes TEXT DEFAULT ''
+            )
+        """)
+
+        # 申论 - 用户答案
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS shenlun_answers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                question_id INTEGER, answer_text TEXT,
+                created_at TEXT DEFAULT (datetime('now', 'localtime'))
+            )
+        """)
+
+        # 申论 - AI 评阅
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS shenlun_evaluations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                question_id INTEGER,
+                total_score INTEGER, content_score INTEGER,
+                structure_score INTEGER, language_score INTEGER,
+                comments TEXT, improvement TEXT,
+                created_at TEXT DEFAULT (datetime('now', 'localtime'))
+            )
+        """)
+
+        # 申论 - 素材库
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS shenlun_phrases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT, tag TEXT, category TEXT DEFAULT '金句',
+                created_at TEXT DEFAULT (datetime('now', 'localtime'))
+            )
+        """)
+
+        # 兼容已有数据库：添加 reference_answer 列
+        try:
+            cursor.execute("ALTER TABLE shenlun_questions ADD COLUMN reference_answer TEXT DEFAULT ''")
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
+        # 兼容已有数据库：添加 fenbi_id 列
+        try:
+            cursor.execute("ALTER TABLE shenlun_materials ADD COLUMN fenbi_id INTEGER DEFAULT 0")
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
+        # 兼容已有数据库：添加 specific_error 列
+        try:
+            cursor.execute("ALTER TABLE pending_diagnosis ADD COLUMN specific_error TEXT DEFAULT ''")
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
+        # 兼容已有数据库：添加 material_indexes 列
+        try:
+            cursor.execute("ALTER TABLE shenlun_questions ADD COLUMN material_indexes TEXT DEFAULT ''")
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
         # 兼容已有数据库：添加 exam_type 列
         try:
             cursor.execute("ALTER TABLE exam_records ADD COLUMN exam_type TEXT DEFAULT '行测'")
@@ -641,14 +732,14 @@ class KnowledgeDB:
 
     def insert_pending_diagnosis(self, question_key: str, report_path: str,
                                   error_type: str, confidence: float,
-                                  explanation: str):
+                                  explanation: str, specific_error: str = ''):
         """插入待确认的诊断结果。"""
         cursor = self.conn.cursor()
         cursor.execute("""
             INSERT INTO pending_diagnosis
-                (question_key, report_path, error_type, confidence, explanation)
-            VALUES (?, ?, ?, ?, ?)
-        """, (question_key, report_path, error_type, confidence, explanation))
+                (question_key, report_path, error_type, confidence, explanation, specific_error)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (question_key, report_path, error_type, confidence, explanation, specific_error))
         self.conn.commit()
 
     def get_pending_diagnoses(self, report_path: str = None) -> list[dict]:

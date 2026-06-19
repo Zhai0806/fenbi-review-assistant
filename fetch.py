@@ -437,6 +437,20 @@ def merge_data(api_results: dict, user_answers: dict = None) -> list[dict]:
     meta_data = api_results.get('meta', {}) or {}
     mark_data = api_results.get('mark', {}) or {}
 
+    # 从 card 树中提取 materialKeys 映射（globalId → materialKeys）
+    def _extract_card_materials(node, result=None):
+        if result is None:
+            result = {}
+        if isinstance(node, dict):
+            if node.get('materialKeys') and node.get('key'):
+                result[node['key']] = node['materialKeys']
+            for child in node.get('children', []):
+                _extract_card_materials(child, result)
+        return result
+
+    card = static_data.get('card', {}) if isinstance(static_data, dict) else {}
+    card_materials = _extract_card_materials(card)
+
     # 获取题目列表
     exercises = _extract_exercises(static_data)
 
@@ -529,7 +543,10 @@ def merge_data(api_results: dict, user_answers: dict = None) -> list[dict]:
                 question['global_correct_ratio'] = None
 
         # 保留材料引用（资料分析题共用材料用）
+        # materialKeys 优先从 solution 取，其次从 card 树取
         material_keys = ex.get('materialKeys', [])
+        if not material_keys:
+            material_keys = card_materials.get(eid, [])
         if material_keys:
             question['materialKeys'] = material_keys
 
@@ -812,6 +829,151 @@ def fetch_and_analyze(exam_input: str, cookie: str = '') -> dict:
             'error': result.get('error', ''),
         }
     except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+
+def fetch_shenlun_data(exam_input: str, paper_id: str = '', check_id: str = '') -> dict:
+    """抓取申论真题（材料+题目+范文，无需用户答案）。
+
+    申论 API 流程与行测不同：
+    1. getPaperSolution?format=html 获取 staticUrl (CDN)
+    2. 请求 CDN URL 获取 {name, materials, solutions}
+    3. solutions 内有 accessories[0] 含 materialIndexes/score/title
+       solutionAccessories 含 reference (范文)/demonstrate (解析)
+
+    Args:
+        exam_input: 试卷 URL 或 exam_key
+
+    Returns:
+        dict: {success, exam_name, materials, questions, error}
+    """
+    config = load_config()
+    fenbi = config.get('fenbi', {})
+    api_base = fenbi.get('api_base', 'https://tiku.fenbi.com/combine')
+    headers = build_headers(config)
+
+    if 'fenbi.com' in exam_input or 'spa.fenbi' in exam_input:
+        exam_key, routecs = extract_exam_key_from_url(exam_input)
+        # 如果没传参数，从 URL 提取
+        if not paper_id or not check_id:
+            parsed = urlparse(exam_input)
+            qs = parse_qs(parsed.query)
+            paper_id = paper_id or qs.get('paperId', [''])[0]
+            check_id = check_id or qs.get('checkId', [''])[0]
+    else:
+        exam_key = exam_input.strip()
+        routecs = 'shenlun'
+
+    try:
+        # Step 1: 获取 CDN URL
+        print("请求 getPaperSolution 获取 CDN 地址...")
+        url1 = f"{api_base}/exercise/getPaperSolution"
+        params = build_params(config, extra={
+            'key': exam_key, 'format': 'html',
+            'paperId': paper_id, 'checkId': check_id,
+        }, routecs=routecs)
+        resp = requests.get(url1, headers=headers, params=params, timeout=30)
+        resp.raise_for_status()
+        paper_data = resp.json()
+        paper = paper_data.get('data', {})
+
+        if not paper:
+            return {'success': False, 'error': 'getPaperSolution 返回空数据'}
+
+        exam_name = paper.get('name', '未知申论试卷')
+        static_url = ''
+        if isinstance(paper.get('staticUrl'), dict):
+            urls = paper['staticUrl'].get('urls', [])
+            static_url = urls[0] if urls else ''
+
+        if not static_url:
+            return {'success': False, 'error': '未找到 CDN 地址'}
+
+        # Step 2: 请求 CDN 获取材料+题目
+        print("请求 CDN 获取材料...")
+        resp2 = requests.get(static_url, headers=headers, timeout=30)
+        resp2.raise_for_status()
+        cdn_data = resp2.json()
+
+        raw_materials = cdn_data.get('materials', [])
+        solutions = cdn_data.get('solutions', [])
+
+        # 存 DB
+        import sqlite3
+        db_path = os.path.join(os.path.dirname(__file__), 'data', 'knowledge_base.db')
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        try:
+            cur.execute("ALTER TABLE shenlun_questions ADD COLUMN reference_answer TEXT DEFAULT ''")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
+        exam_date = fetch_exam_date(config, exam_key, routecs) or datetime.now().strftime('%Y-%m-%d')
+        cur.execute("INSERT INTO shenlun_exams (exam_name, exam_date) VALUES (?, ?)", (exam_name, exam_date))
+        exam_id = cur.lastrowid
+
+        # 存材料
+        for mi, m in enumerate(raw_materials):
+            cur.execute(
+                "INSERT INTO shenlun_materials (exam_id, sort_order, content, fenbi_id) VALUES (?, ?, ?, ?)",
+                (exam_id, mi + 1, m.get('content', ''), m.get('id', 0))
+            )
+
+        # 存题目（含题型/分值/字数/范文）
+        saved_qs = []
+        for qi, s in enumerate(solutions):
+            acc = s.get('accessories', [{}])[0] if s.get('accessories') else {}
+            sol_acc = s.get('solutionAccessories', [])
+            reference = ''
+            for sa in sol_acc:
+                if sa.get('label') == 'reference':
+                    reference = sa.get('content', '')
+                    break
+
+            # 题型识别（按优先级：文章 > 公文 > 对策 > 分析 > 概括）
+            content_text = s.get('content', '')
+            title_text = acc.get('title', '')
+            combined = title_text + content_text
+            if '文章' in combined or '议论文' in combined or '写一篇' in combined:
+                question_type = '文章写作'
+            elif '拟写' in combined or '讲话稿' in combined or '发言稿' in combined or '提纲' in combined or '推荐材料' in combined or '工作总结' in combined or '公开信' in combined:
+                question_type = '贯彻执行'
+            elif '对策' in combined or '建议' in combined or '办法' in combined or '措施' in combined:
+                question_type = '提出对策'
+            elif '分析' in combined or '理解' in combined or '解释' in combined or '认识' in combined or '看法' in combined:
+                question_type = '综合分析'
+            else:
+                question_type = '归纳概括'  # 兜底
+
+            # 材料关联
+            mat_indexes = acc.get('materialIndexes', [])
+            mat_indexes_str = json.dumps(mat_indexes) if mat_indexes else ''
+
+            cur.execute(
+                "INSERT INTO shenlun_questions (exam_id, sort_order, question_number, question_type, content, score, word_limit, exam_name, reference_answer, material_indexes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (exam_id, qi + 1, f"第{qi+1}题", question_type,
+                 s.get('content', ''), int(acc.get('score', 0) or 0),
+                 f"不超过{acc.get('wordCount', '')}字" if acc.get('wordCount') else '不限',
+                 exam_name, reference, mat_indexes_str)
+            )
+            saved_qs.append({
+                'id': cur.lastrowid, 'content': s.get('content', ''),
+                'type': question_type, 'score': int(acc.get('score', 0) or 0),
+                'word_limit': acc.get('wordCount', '不限'),
+                'reference': reference[:500],
+            })
+
+        conn.commit()
+        conn.close()
+
+        return {
+            'success': True, 'exam_name': exam_name,
+            'materials': len(raw_materials), 'questions': saved_qs,
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         return {'success': False, 'error': str(e)}
 
 

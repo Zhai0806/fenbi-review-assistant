@@ -1,0 +1,17 @@
+body { margin: 0; font-size: 20px; }
+#root { width: 92%; max-width: 1500px; margin: 0 auto; text-align: left; min-height: 100vh; font-size: 20px; }
+.ant-layout { background: #fff; font-size: 20px; }
+.ant-layout-content { padding: 8px 12px !important; margin: 0 !important; font-size: 20px; }
+.ant-layout-content p, .ant-layout-content span, .ant-layout-content div, .ant-layout-content li, .ant-layout-content td { font-size: 20px !important; }
+.ant-layout-sider { max-width: 160px !important; min-width: 160px !important; width: 160px !important; flex: 0 0 160px !important; }
+.ant-card-body { padding: 8px 10px !important; }
+.ant-btn, .ant-select-selector, .ant-menu-item, .ant-select-item, .ant-tag { font-size: 16px !important; }
+h3 { font-size: 26px !important; }
+#root { width: 95%; max-width: 1400px; margin: 0 auto; text-align: left; min-height: 100vh; }
+.ant-layout { background: #fff; }
+.ant-layout-content { padding: 8px 16px !important; margin: 0 !important; }
+.ant-layout-sider { max-width: 160px !important; min-width: 160px !important; width: 160px !important; flex: 0 0 160px !important; }
+.ant-card-body { padding: 8px 10px !important; }
+.ant-table { font-size: 16px; }
+.ant-tag { font-size: 15px; }
+h3 { font-size: 22px !important; }
