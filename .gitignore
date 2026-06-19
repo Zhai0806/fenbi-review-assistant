@@ -28,3 +28,6 @@ ngrok_new.zip
 # 环境
 .env
 .streamlit/secrets.toml
+frontend/.vite/
+frontend/dist/
+frontend/node_modules/
