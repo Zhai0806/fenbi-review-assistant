@@ -12,7 +12,7 @@ router = APIRouter(tags=["shenlun"])
 @router.post("/shenlun/fetch")
 def fetch_shenlun(body: dict, db=Depends(get_db)):
     """抓取申论真题"""
-    from fetch import fetch_shenlun_data
+    from utils.fetch import fetch_shenlun_data
     return fetch_shenlun_data(
         body.get("exam_input", ""),
         paper_id=body.get("paper_id", ""),

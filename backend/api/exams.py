@@ -11,7 +11,7 @@ router = APIRouter(tags=["exams"])
 @router.post("/exams/fetch")
 def fetch_exam(body: dict, db=Depends(get_db)):
     """抓取 + 入库模考数据"""
-    from fetch import fetch_and_analyze
+    from utils.fetch import fetch_and_analyze
     return fetch_and_analyze(body.get("input", ""), body.get("cookie", ""))
 
 

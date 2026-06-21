@@ -28,9 +28,12 @@ import requests
 import yaml
 
 
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 def load_config() -> dict:
     """加载 config.yaml 配置文件。"""
-    config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
+    config_path = os.path.join(_PROJECT_ROOT, 'config.yaml')
     if not os.path.exists(config_path):
         print(f"❌ 配置文件不存在：{config_path}")
         sys.exit(1)
@@ -679,7 +682,7 @@ def save_report(questions: list[dict], exam_name: str = None, exam_date: str = '
     dir_date = exam_date or timestamp[:10]
     safe_name = sanitize_filename(exam_name) if exam_name else 'unknown'
     dir_name = f"{dir_date}_{timestamp[11:]}_{safe_name}"
-    base_dir = os.path.join(os.path.dirname(__file__), 'data', 'reports', dir_name)
+    base_dir = os.path.join(_PROJECT_ROOT, 'data', 'reports', dir_name)
     os.makedirs(base_dir, exist_ok=True)
 
     file_path = os.path.join(base_dir, 'merged_report.json')
@@ -812,7 +815,7 @@ def fetch_and_analyze(exam_input: str, cookie: str = '') -> dict:
         # Step 6: 自动入库分析
         from utils.analysis import process_report_for_init
         from utils.db import KnowledgeDB
-        db_path = os.path.join(os.path.dirname(__file__), 'data', 'knowledge_base.db')
+        db_path = os.path.join(_PROJECT_ROOT, 'data', 'knowledge_base.db')
         db = KnowledgeDB(db_path)
         result = process_report_for_init(report_path, db, diagnose_errors=False)
 
@@ -900,7 +903,7 @@ def fetch_shenlun_data(exam_input: str, paper_id: str = '', check_id: str = '') 
 
         # 存 DB
         import sqlite3
-        db_path = os.path.join(os.path.dirname(__file__), 'data', 'knowledge_base.db')
+        db_path = os.path.join(_PROJECT_ROOT, 'data', 'knowledge_base.db')
         conn = sqlite3.connect(db_path)
         cur = conn.cursor()
         try:
