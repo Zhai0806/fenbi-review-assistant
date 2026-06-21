@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { Card, Table, Tag, Spin, Button, Tabs } from "antd";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
+import { marked } from "marked";
 import api from "../api/client";
 
 const LOGIC_MODS = ["言语理解与表达", "数量关系", "判断推理", "资料分析"];
 const MEMORY_MODS = ["政治理论", "常识判断"];
+const GONGJI_MODS = ["时事政治", "政治", "经济", "管理", "公文", "人文历史", "科技地理", "法律", "农业农村知识", "其他"];
 const COLORS: Record<string, string> = { "言语理解与表达": "#1a73e8", "数量关系": "#e53935", "判断推理": "#4caf50", "资料分析": "#ff9800", "政治理论": "#9c27b0", "常识判断": "#00bcd4" };
 
 export default function Insights() {
@@ -16,8 +18,8 @@ export default function Insights() {
   const [trendData, setTrendData] = useState<any[]>([]);
   const [contra, setContra] = useState<any>({});
   const [loading, setLoading] = useState(true);
-  const [cat, setCat] = useState<"logic" | "memory">("logic");
-  const activeMods = cat === "logic" ? LOGIC_MODS : MEMORY_MODS;
+  const [cat, setCat] = useState<"logic" | "memory" | "gongji">("logic");
+  const activeMods = cat === "logic" ? LOGIC_MODS : cat === "memory" ? MEMORY_MODS : GONGJI_MODS;
 
   useEffect(() => {
     Promise.all([
@@ -26,6 +28,9 @@ export default function Insights() {
     ]).then(([m, ex, t, c]) => {
       setModules(m.data); setExams(ex.data);
       setTrendData(t.data || []); setContra(c.data || {}); setLoading(false);
+    }).catch(err => {
+      console.error('Insights load failed:', err);
+      setLoading(false);
     });
   }, []);
 
@@ -48,8 +53,8 @@ export default function Insights() {
     <div>
       <h2>📊 知识洞察</h2>
       <Button type={cat === "memory" ? "primary" : "default"}
-        onClick={() => setCat(cat === "logic" ? "memory" : "logic")} style={{ marginBottom: 12 }}>
-        {cat === "logic" ? "📐 逻辑模块" : "📚 知识模块"}
+        onClick={() => setCat(cat === "logic" ? "memory" : cat === "memory" ? "gongji" : "logic")} style={{ marginBottom: 12 }}>
+        {cat === "logic" ? "📐 逻辑模块" : cat === "memory" ? "📚 知识模块" : "🏛 公基"}
       </Button>
       <Tabs items={[
         {
@@ -92,17 +97,84 @@ export default function Insights() {
         {
           key: "contra", label: "矛盾分析",
           children: <div>
-            {contra.principal && <div style={{ padding: 12, background: "#fff3f3", borderRadius: 8, marginBottom: 16, border: "2px solid #e53935" }}>
-              <h3 style={{ color: "#e53935", margin: 0 }}>⚡ 主要矛盾：{contra.principal}</h3>
-              <p style={{ marginTop: 8 }}>{contra.advice}</p>
-            </div>}
-            {(contra.analysis || []).map((a: any) => (
-              <div key={a.module} style={{ marginBottom: 8, padding: 8, background: a.module === contra.principal ? "#fff3f3" : "#fafafa", borderRadius: 4 }}>
-                <strong>{a.module}</strong> — 正确率 {a.accuracy}%
-                <span style={{ marginLeft: 12, color: a.gap > 10 ? "#e53935" : "#666" }}>与最强差 {a.gap}pp</span>
-                <p style={{ color: "#666", margin: "4px 0 0" }}>{a.advice}</p>
-              </div>
-            ))}
+            {Object.keys(contra).filter(k => k !== "error" && typeof contra[k] === "object" && contra[k].analysis).length === 0 && !contra.error && (
+              <div style={{ textAlign: "center", padding: 40, color: "#999" }}>暂无矛盾分析。请先对考试运行 AI 诊断。</div>
+            )}
+            {contra.error && <div style={{ color: "#999" }}>{contra.error}</div>}
+
+            {/* 每种考试类型一个区块 */}
+            {Object.entries(contra).filter(([k]) => !k.startsWith("_") && k !== "error").map(([examType, data]: [string, any]) => {
+              if (!data || !data.analysis) return null;
+              const isGongji = examType === "公基";
+              return (
+                <div key={examType} style={{ marginBottom: 24, border: `2px solid ${isGongji ? "#9c27b0" : "#1a73e8"}`, borderRadius: 8, overflow: "hidden" }}>
+                  <div style={{ padding: "8px 14px", background: isGongji ? "#f3e5f5" : "#e3f2fd", fontWeight: 600 }}>
+                    {isGongji ? "🏛" : "📐"} {examType} 矛盾分析
+                    {data.latest_exam && <span style={{ fontWeight: 400, color: "#666", marginLeft: 12, fontSize: 13 }}>基于：{data.latest_exam.name}（{data.latest_exam.date}）{data.latest_exam.score}</span>}
+                  </div>
+                  <div style={{ padding: 12 }}>
+
+                    {/* AI 矛盾分析 */}
+                    <div style={{ padding: 14, background: "#fffbf0", borderRadius: 8, marginBottom: 16, border: "2px solid #ff9800", lineHeight: 1.8 }}
+                      dangerouslySetInnerHTML={{ __html: marked.parse(data.analysis, { breaks: true }) as string }} />
+
+                    {/* 连锁影响（仅行测/职测） */}
+                    {(data.cascade || []).length > 0 && <div style={{ marginBottom: 16 }}>
+                      <h4 style={{ color: "#e53935" }}>⚠️ 连锁影响</h4>
+                      {data.cascade.map((c: any, i: number) => (
+                        <div key={i} style={{ padding: 8, marginBottom: 6, background: "#fff3f3", borderRadius: 6, border: "1px solid #ffcdd2" }}>
+                          <div><strong>{c["超时模块"]}</strong> 超时 {c["超时倍数"]} 倍（正确率仅{c["正确率"]}%）</div>
+                          <div style={{ marginTop: 4 }}>挤压了：{c["可能挤压的模块"]?.map((m: string) => <Tag key={m} color="red" style={{ marginLeft: 4 }}>{m}</Tag>)}</div>
+                          {c["分析"] && <div style={{ marginTop: 4, color: "#888", fontSize: 12 }}>{c["分析"]}</div>}
+                        </div>
+                      ))}
+                    </div>}
+
+                    {/* 题型粒度分析表 */}
+                    {data.qtype_detail && data.qtype_detail.length > 0 && <div style={{ marginBottom: 16 }}>
+                      <h4>题型粒度分析</h4>
+                      <Table dataSource={data.qtype_detail} rowKey={(r: any) => r["模块"] + r["题型"]} size="small" pagination={false}
+                        columns={[
+                          { title: "模块", dataIndex: "模块", width: 100 },
+                          { title: "题型", dataIndex: "题型", width: 100 },
+                          { title: "题数", dataIndex: "题数", width: 50 },
+                          { title: "你的", dataIndex: "你的正确率", width: 60, render: (v: number) => `${v}%` },
+                          { title: "全站", dataIndex: "全站正确率", width: 60, render: (v: any) => v != null ? `${v}%` : "?" },
+                          { title: "差距", dataIndex: "差距", width: 60, render: (v: any) => v != null ? <span style={{ color: v < -10 ? "#e53935" : v > 10 ? "#4caf50" : "#666" }}>{v > 0 ? "+" : ""}{v}pp</span> : "?" },
+                          { title: "判定", dataIndex: "判定", width: 80, render: (v: string) => <Tag color={v === "个人弱" ? "red" : v === "题目难" ? "orange" : "default"}>{v}</Tag> },
+                        ]} />
+                    </div>}
+
+                    {/* 跨考试趋势 */}
+                    {data.trends && data.trends.length > 0 && <div style={{ marginBottom: 16 }}>
+                      <h4>跨考试演化趋势</h4>
+                      {data.trends.map((t: any, i: number) => (
+                        <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, padding: "4px 8px", background: "#fafafa", borderRadius: 4 }}>
+                          <strong style={{ width: 100 }}>{t["模块"]}</strong>
+                          <span style={{ flex: 1, fontSize: 12, color: "#666" }}>{(t["趋势"] || []).map((p: any) => `${p["考试"]} ${p["正确率"]}%`).join(" → ")}</span>
+                          <Tag color={t["方向"] === "↑提升" ? "green" : t["方向"] === "↓下降" ? "red" : "default"}>{t["方向"]} {t["变化"]}%</Tag>
+                        </div>
+                      ))}
+                    </div>}
+
+                    {/* 用时矩阵 */}
+                    {data.timing_matrix && data.timing_matrix.length > 0 && <div>
+                      <h4>用时-正确率矩阵</h4>
+                      <Table dataSource={data.timing_matrix} rowKey="模块" size="small" pagination={false}
+                        columns={[
+                          { title: "#", dataIndex: "序号", width: 40 },
+                          { title: "模块", dataIndex: "模块", width: 100 },
+                          { title: "题数", dataIndex: "题数", width: 50 },
+                          { title: "正确率", dataIndex: "正确率", width: 70, render: (v: number) => `${v}%` },
+                          { title: "平均用时", dataIndex: "平均用时秒", width: 70, render: (v: number) => `${v}秒` },
+                          { title: "预算", dataIndex: "预算秒", width: 60, render: (v: number) => `${v}秒` },
+                          { title: "超支", dataIndex: "超支比例", width: 70, render: (v: number) => <span style={{ color: v > 1.3 ? "#e53935" : v > 1.1 ? "#ff9800" : "#4caf50" }}>{v.toFixed(1)}x</span> },
+                        ]} />
+                    </div>}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         },
         {

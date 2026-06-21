@@ -73,3 +73,35 @@ def delete_link(idx: int):
         links.pop(idx)
         _save_links(links)
     return {"ok": True}
+
+
+# ─── 报告文件 ───
+
+DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data")
+
+
+@router.get("/reports")
+def list_reports():
+    """列出 data 目录下所有 md 报告文件"""
+    files = []
+    if os.path.exists(DATA_DIR):
+        for f in sorted(os.listdir(DATA_DIR), reverse=True):
+            if f.endswith('.md'):
+                path = os.path.join(DATA_DIR, f)
+                stat = os.stat(path)
+                files.append({
+                    "name": f,
+                    "size": stat.st_size,
+                    "mtime": stat.st_mtime,
+                })
+    return files
+
+
+@router.get("/reports/{filename}")
+def get_report(filename: str):
+    """读取指定 md 报告文件内容"""
+    path = os.path.join(DATA_DIR, filename)
+    if not os.path.exists(path) or not filename.endswith('.md'):
+        return {"error": "文件不存在"}
+    with open(path, 'r', encoding='utf-8') as f:
+        return {"name": filename, "content": f.read()}

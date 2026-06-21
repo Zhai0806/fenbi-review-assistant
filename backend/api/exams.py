@@ -101,6 +101,7 @@ def get_exam(exam_id: int, db=Depends(get_db)):
         "correct": exam["correct_questions"],
         "time_sec": exam["total_time_sec"],
         "accuracy": exam["correct_questions"] / max(exam["total_questions"], 1),
+        "summary": exam.get("exam_summary", "") or "",
         "materials": materials,
         "questions": [
             {
@@ -110,7 +111,6 @@ def get_exam(exam_id: int, db=Depends(get_db)):
                 "correct_answer": q.get("correct_answer", ""),
                 "is_correct": q.get("is_correct", False),
                 "time_sec": q.get("time_spent_sec"),
-                "error_type": q.get("error_type") or "",
                 "global_ratio": q.get("global_correct_ratio") or 0,
                 "is_guessed": q.get("is_guessed_correct", False),
                 "is_time_anomaly": q.get("is_time_anomaly", False),

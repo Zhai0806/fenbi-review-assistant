@@ -9,15 +9,12 @@ router = APIRouter(tags=["questions"])
 
 
 class UpdateQuestion(BaseModel):
-    error_type: str | None = None
     user_note: str | None = None
 
 
 @router.put("/questions/{question_key}")
 def update_question(question_key: str, body: UpdateQuestion, db=Depends(get_db)):
-    """更新单题的错误类型或备注"""
-    if body.error_type is not None:
-        db.update_question_field(question_key, "error_type", body.error_type)
+    """更新单题的备注"""
     if body.user_note is not None:
         db.update_question_field(question_key, "user_note", body.user_note)
     return {"ok": True}
@@ -93,7 +90,7 @@ def wrong_bank(
                 "content": q.get("content", ""), "options": q.get("options", []),
                 "your_answer": qa.get("your_answer", "") if qa else q.get("your_answer", ""),
                 "correct_answer": qa.get("correct_answer", "") if qa else q.get("correct_answer", ""),
-                "module": mod, "error_type": qa.get("error_type", "") if qa else "",
+                "module": mod,
                 "time_sec": q.get("time_spent_sec", 0), "exam_name": exam["exam_name"],
                 "exam_date": exam["exam_date"],
             })

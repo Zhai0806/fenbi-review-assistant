@@ -1,10 +1,15 @@
 import { useEffect, useState } from "react";
-import { Tabs, Input, Button, List, Card, Popconfirm, message, Space } from "antd";
+import { Tabs, Input, Button, List, Card, Popconfirm, message, Space, Spin } from "antd";
+import { FileTextOutlined } from "@ant-design/icons";
+import { marked } from "marked";
 import api from "../api/client";
 
 export default function Notes() {
   const [notes, setNotes] = useState<any[]>([]);
   const [links, setLinks] = useState<any[]>([]);
+  const [reports, setReports] = useState<any[]>([]);
+  const [reportContent, setReportContent] = useState("");
+  const [reportLoading, setReportLoading] = useState(false);
   const [ntitle, setNtitle] = useState("");
   const [ncontent, setNcontent] = useState("");
   const [lname, setLname] = useState("");
@@ -14,7 +19,15 @@ export default function Notes() {
   useEffect(() => {
     api.get("/notes").then((r) => setNotes(r.data));
     api.get("/links").then((r) => setLinks(r.data));
+    api.get("/reports").then((r) => setReports(r.data));
   }, []);
+
+  const loadReport = async (name: string) => {
+    setReportLoading(true);
+    const r = await api.get(`/reports/${encodeURIComponent(name)}`);
+    setReportContent(r.data.content || "");
+    setReportLoading(false);
+  };
 
   const addNote = async () => {
     if (!ntitle) return;
@@ -79,6 +92,30 @@ export default function Notes() {
                   {l.desc && <span style={{ color: "#999", marginLeft: 8 }}>{l.desc}</span>}
                 </List.Item>
               )} />
+          </div>
+        },
+        {
+          key: "reports", label: "📊 报告",
+          children: <div style={{ display: "flex", gap: 16, height: "calc(100vh - 200px)" }}>
+            <div style={{ width: 260, borderRight: "1px solid #eee", overflow: "auto" }}>
+              <List dataSource={reports} size="small"
+                renderItem={(r: any) => (
+                  <List.Item style={{ cursor: "pointer", padding: "6px 8px" }}
+                    onClick={() => loadReport(r.name)}>
+                    <FileTextOutlined style={{ marginRight: 8 }} />
+                    <span style={{ fontSize: 13 }}>{r.name.replace('.md', '')}</span>
+                  </List.Item>
+                )} />
+            </div>
+            <div style={{ flex: 1, overflow: "auto" }}>
+              {reportLoading ? <Spin /> : (
+                reportContent ? (
+                  <div dangerouslySetInnerHTML={{ __html: marked.parse(reportContent, { breaks: true }) as string }} />
+                ) : (
+                  <div style={{ color: "#999", textAlign: "center", padding: 40 }}>点击左侧文件名查看报告</div>
+                )
+              )}
+            </div>
           </div>
         },
       ]} />

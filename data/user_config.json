@@ -1,0 +1,54 @@
+{
+  "exam_order": [
+    "言语理解与表达",
+    "资料分析",
+    "判断推理",
+    "政治理论",
+    "常识判断",
+    "数量关系"
+  ],
+  "time_budget_min": {
+    "言语理解与表达": 22.5,
+    "资料分析": 27.5,
+    "判断推理": 32.5,
+    "政治理论+常识判断+数量关系": 35
+  },
+  "strategy": {
+    "prep_phase": "在职备考（2026年7月起）",
+    "prep_duration": "1年长期备考，非短期冲刺",
+    "target_score": 70,
+    "must_keep_modules": ["言语理解与表达", "资料分析", "判断推理", "政治理论", "常识判断"],
+    "can_skip_conditionally": ["数量关系"],
+    "skip_strategy": "数量关系：时间充裕做5蒙5，不充裕全蒙同一选项",
+    "analysis_perspective": "系统长期提升，不接受「放弃某题型」建议。单题超时跳题可接受，但模块层面不放弃。",
+    "weak_points_explicit": [
+      "逻辑填空：成语/实词储备不足",
+      "逻辑判断-翻译题：公式记忆不清",
+      "逻辑判断-组合排列：无从下手",
+      "图形推理：规律察觉慢",
+      "资料分析：考场紧张时只能调用厂除，高级算法无法自然使用",
+      "政治理论：知识储备不足，波动大"
+    ]
+  },
+  "state_management": {
+    "note": "「状态」是关键变量。考场紧张会降级表现（如算法选择退化）。备考需考虑在职节奏。",
+    "work_status": "在职（2026年7月起）",
+    "weekday_available_hours": "有限",
+    "need_peak_state_maintenance": true
+  },
+  "reserved_interfaces": {
+    "shenlun": {
+      "status": "reserved",
+      "note": "申论批改+素材库+历年真题，AI评阅已预留接口",
+      "db_tables": ["shenlun_exams", "shenlun_materials", "shenlun_questions", "shenlun_answers", "shenlun_evaluations", "shenlun_phrases"]
+    },
+    "major_subject": {
+      "status": "reserved",
+      "note": "专业科目题库+知识点体系，待扩展"
+    },
+    "interview": {
+      "status": "reserved",
+      "note": "结构化面试题库+AI模拟面试，待扩展"
+    }
+  }
+}

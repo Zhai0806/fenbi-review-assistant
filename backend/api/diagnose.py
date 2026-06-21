@@ -1,18 +1,18 @@
 """AI 诊断相关 API"""
 
-import os
 import json
+import asyncio
+import threading
+from queue import Queue, Empty
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
 
 from backend.db import get_db
 
 router = APIRouter(tags=["diagnose"])
 
-
-class ConfirmBody(BaseModel):
-    error_type: str | None = None
+# 诊断取消信号：{exam_id: threading.Event}
+_cancel_events: dict[int, threading.Event] = {}
 
 
 @router.post("/diagnose/{exam_id}")
@@ -25,15 +25,50 @@ async def run_diagnose(exam_id: int, db=Depends(get_db)):
 
     from utils.analysis import diagnose_report_errors
 
+    # 创建取消信号
+    cancel_evt = threading.Event()
+    _cancel_events[exam_id] = cancel_evt
+
     async def event_stream():
-        yield f"data: {json.dumps({'status': 'started', 'msg': '开始诊断...'})}\n\n"
-        try:
-            result = diagnose_report_errors(db, exam["report_path"])
-            yield f"data: {json.dumps({'status': 'done', **result})}\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'status': 'error', 'msg': str(e)})}\n\n"
+        yield f"data: {json.dumps({'status': 'started', 'msg': '开始诊断... v3-errmsg'})}\n\n"
+
+        q: Queue = Queue()
+        error_holder: list = []
+
+        def run_diagnosis():
+            try:
+                for event in diagnose_report_errors(db, exam["report_path"], cancel_event=cancel_evt):
+                    q.put(event)
+                q.put(None)  # sentinel: done
+            except Exception as e:
+                error_holder.append(e)
+                q.put(None)
+
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(None, run_diagnosis)
+
+        while True:
+            event = await loop.run_in_executor(None, q.get)
+            if event is None:
+                break
+            yield f"data: {json.dumps(event)}\n\n"
+
+        if error_holder:
+            yield f"data: {json.dumps({'status': 'error', 'msg': str(error_holder[0])})}\n\n"
+        # 清理取消信号
+        _cancel_events.pop(exam_id, None)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.post("/diagnose/{exam_id}/cancel")
+def cancel_diagnose(exam_id: int):
+    """取消正在进行的诊断"""
+    evt = _cancel_events.get(exam_id)
+    if evt:
+        evt.set()
+        return {"ok": True, "msg": "已发送取消信号"}
+    return {"ok": False, "msg": "没有正在进行的诊断"}
 
 
 @router.get("/diagnoses")
@@ -50,9 +85,9 @@ def list_diagnoses(exam_id: int | None = None, db=Depends(get_db)):
             {
                 "id": p["id"],
                 "question_key": p["question_key"],
-                "error_type": p["error_type"],
                 "confidence": p["confidence"],
                 "specific_error": p.get("specific_error", ""),
+                "countermeasure": p.get("countermeasure", ""),
                 "explanation": p["explanation"],
                 "source": qa.get("source", "") if qa else "",
                 "your_answer": qa.get("your_answer", "") if qa else "",
@@ -63,7 +98,7 @@ def list_diagnoses(exam_id: int | None = None, db=Depends(get_db)):
 
 
 @router.post("/diagnoses/{diag_id}/confirm")
-def confirm_diagnosis(diag_id: int, body: ConfirmBody, db=Depends(get_db)):
+def confirm_diagnosis(diag_id: int, db=Depends(get_db)):
     """确认诊断"""
-    db.confirm_diagnosis(diag_id, final_error_type=body.error_type)
+    db.confirm_diagnosis(diag_id)
     return {"ok": True}

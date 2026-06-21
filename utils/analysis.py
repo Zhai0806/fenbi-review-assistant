@@ -20,21 +20,18 @@ from typing import Optional
 
 # 支持的考试类型及其模块定义（预留扩展接口）
 EXAM_TYPE_CONFIG = {
-    '行测': {
+    '行测/职测': {
         'modules': ['政治理论', '常识判断', '言语理解与表达', '数量关系', '判断推理', '资料分析'],
-        'name_patterns': ['行测', '行政职业能力', '省考', '国考', '模考大赛', '公务员录用'],
+        'name_patterns': ['行测', '行政职业能力', '省考', '国考', '模考大赛', '公务员录用',
+                         '职业能力测试', '职测', '职业能力倾向测验', '事业单位联考', '三支一扶'],
     },
-    '职测': {
-        'modules': ['言语理解与表达', '数量关系', '判断推理', '资料分析', '常识判断'],
-        'name_patterns': ['职业能力测试', '职测', '三支一扶', '事业单位联考'],
+    '公基': {
+        'modules': ['时事政治', '政治', '经济', '管理', '公文', '人文历史', '科技地理', '法律', '农业农村知识', '其他'],
+        'name_patterns': ['综合知识', '公基', '公共基础', '公共基础知识'],
     },
     '申论': {
         'modules': ['归纳概括', '综合分析', '提出对策', '贯彻执行', '文章写作'],
         'name_patterns': ['申论'],
-    },
-    '公共基础知识': {
-        'modules': ['政治理论', '法律常识', '经济常识', '管理常识', '公文写作', '人文历史', '科技地理'],
-        'name_patterns': ['公基', '公共基础', '事业单位', '综合知识'],
     },
     '专业科目': {
         'modules': [],  # 随 keypoints 动态识别
@@ -56,7 +53,7 @@ def detect_exam_type(exam_name: str) -> str:
         for pat in config['name_patterns']:
             if pat in exam_name:
                 return exam_type
-    return '行测'  # 兜底
+    return '行测/职测'  # 兜底
 
 
 # ======================== 模块归类 ========================
@@ -65,18 +62,18 @@ def detect_exam_type(exam_name: str) -> str:
 # 注意：字典遍历顺序即匹配优先级，排在前面先匹配
 # 扩展考试类型时，只需在 EXAM_TYPE_CONFIG 中注册，然后在此处补充模块关键词
 MODULE_KEYWORDS = {
+    # ============ 行测/职测 模块 ============
     "资料分析": [
         "增长率", "增长量", "比重", "倍数", "平均数", "年均增长",
-        "综合分析", "综合资料", "基期", "现期", "同比", "环比",
+        "综合分析", "综合资料", "综合材料", "基期", "现期", "同比", "环比",
         "拉动增长", "贡献率", "指数", "翻番", "百分点",
-        "图表", "统计图", "折线图", "柱状图", "饼图",
+        "图表", "统计图", "折线图", "柱状图", "饼图", "统计表",
         "年均增速", "年均增长量", "混合增速", "间隔增速",
-        "两期比重", "基期比重", "比重差", "比重变化",
-        "倍数与翻番", "平均数的增长量", "平均数的增长率",
-        "容斥", "多部分", "拉动…增长", "贡献率",
+        "两期比重", "基期比重", "比重差", "比重变化", "比重问题",
+        "倍数与翻番", "倍数与比值", "平均数的增长量", "平均数的增长率",
+        "平均数问题", "容斥", "多部分", "拉动…增长",
         "进出口", "贸易", "进口", "出口",
-        "文字资料", "统计表", "综合材料",
-        "简单加减", "加减计算", "现期比重",
+        "文字资料", "简单加减", "加减计算", "简单计算", "现期比重",
     ],
     "数量关系": [
         "方程", "不定方程", "排列组合", "概率", "几何",
@@ -88,13 +85,13 @@ MODULE_KEYWORDS = {
         "整除", "奇偶", "质合", "代入排除",
         "和差倍比", "完工", "给工", "给效率", "给具体",
         "统筹", "分堆", "平均速度", "相遇", "追及",
-        "比值计算",
+        "比值计算", "数学运算",
     ],
     "言语理解与表达": [
         "言语", "阅读理解", "逻辑填空", "语句表达", "语序",
         "主旨", "意图", "细节", "标题", "衔接", "下文",
         "成语", "实词", "虚词", "混搭", "语境",
-        "片段", "篇章", "病句", "歧义", "修辞",
+        "片段", "片段阅读", "篇章", "病句", "歧义", "修辞",
         "态度", "词语理解", "代词", "语句排序",
         "语句填空", "承接叙述", "道理启示",
         "关联词", "转折", "因果", "对策", "词的辨析",
@@ -104,6 +101,7 @@ MODULE_KEYWORDS = {
     ],
     "判断推理": [
         "判断", "图形", "定义", "类比", "逻辑",
+        "图形推理", "定义判断", "类比推理", "逻辑判断",
         "翻译", "真假", "加强", "削弱", "前提",
         "归纳", "解释", "评价", "结构相似",
         "必然性", "可能性", "选言", "假言", "直言",
@@ -117,29 +115,70 @@ MODULE_KEYWORDS = {
         "因果关系", "手段目的", "论证结构",
         "样式规律", "数量规律", "语义关系", "搭桥",
         "一真", "原因结果", "必要条件", "假设",
-        "确定信息", "遍历", "加减同异", "黑白运算",
-        "拆分",
+        "确定信息", "遍历", "加减同异", "黑白运算", "拆分",
     ],
     "常识判断": [
         "常识", "历史", "地理", "科技", "生物", "化学",
-        "物理", "医学", "农业", "航天", "计算机",
-        "文学", "文化", "艺术", "哲学", "宗教",
+        "物理", "医学", "农业", "航天",
+        "文学", "文化", "艺术",
         "中国古代", "中国近代", "世界史", "省情",
         "天文", "气象", "节气", "民俗",
-        "诉讼法", "重要事件",
-        "法律", "民法典", "刑法", "宪法", "行政法",
-        "民法", "法规", "条例", "普查", "人口",
-        "时政", "科技成就", "新年贺词", "两会",
-        "中央农村工作", "政府督查", "十四五",
+        "经济常识", "科技常识", "人文常识", "地理国情", "法律常识",
+        # 行测常识判断也包含经济和法律类知识点，必须在公基关键词之前匹配
+        "经济", "法律", "宪法", "刑法", "民法典", "民法", "行政法",
+        "法规", "条例", "诉讼法", "劳动法",
+        "宏观经济", "微观经济", "市场经济",
     ],
     "政治理论": [
-        "政治", "文件", "会议", "政策", "法律", "宪法",
-        "行政法", "刑法", "民法", "法规", "条例",
-        "时政", "二十大", "十九大", "二十大报告", "十九届",
+        "政治理论", "马克思主义", "新思想", "时事政治", "毛中特",
+        "文件", "会议", "政策",
+        "二十大", "十九大", "二十大报告", "十九届",
         "政府工作报告", "一号文件", "中央经济工作",
         "国家安全", "外交", "军事", "国防",
-        "建设", "经济", "民生", "生态", "党建",
-        "唯物", "史观",
+        "唯物", "史观", "辩证法",
+        "重要会议", "重要文件", "重要事件",
+        "建设", "政治建设", "经济建设", "社会建设", "文化建设", "生态建设",
+    ],
+
+    # ============ 公基 模块 ============
+    "时事政治": [
+        "时政真题", "时政模拟题", "重要文件", "重要会议讲话",
+        "重要事件", "时政",
+    ],
+    "政治": [
+        "马克思主义哲学", "毛泽东思想概论", "中国特色社会主义理论体系",
+        "党的基本知识", "道德", "科学社会主义",
+        "哲学", "毛概", "中特", "党史", "党建",
+    ],
+    "经济": [
+        "社会主义市场经济体制", "宏观经济", "微观经济",
+        "市场经济", "经济体制",
+    ],
+    "管理": [
+        "行政管理", "公共管理",
+    ],
+    "公文": [
+        "公文", "公文的基本知识", "公文写作", "公文处理",
+    ],
+    "人文历史": [
+        "历史常识", "文学常识", "文化常识", "人文", "历史",
+        "中国古代史", "中国近代史", "世界历史",
+    ],
+    "科技地理": [
+        "科技", "地理国情", "地理", "科技常识", "生物", "化学", "物理",
+        "计算机基础知识",
+    ],
+    "法律": [
+        "法理学", "宪法", "刑法", "民法典", "知识产权",
+        "行政法", "行政法与行政诉讼法", "经济法", "商法",
+        "劳动法", "劳动法与社会保障法", "程序法", "诉讼法",
+        "民法", "法规", "条例",
+    ],
+    "农业农村知识": [
+        "基层治理", "三农政策法规", "三农", "农业农村", "乡村振兴",
+    ],
+    "其他": [
+        "计算机基础知识",
     ],
 }
 
@@ -147,17 +186,18 @@ MODULE_KEYWORDS = {
 # 题型关键词映射表（模块 → 题型 → 关键词）
 # 只有存在明确子类型的模块才需要细分
 QUESTION_TYPE_KEYWORDS = {
+    # ============ 行测/职测 题型 ============
     "言语理解与表达": {
         "逻辑填空": [
             "实词填空", "成语填空", "混搭填空", "前后呼应",
             "词的辨析", "感情色彩", "词义侧重", "程度轻重",
             "搭配对象", "关联词", "转折", "因果", "对策", "并列",
-            "横线", "拆词",
+            "横线", "拆词", "逻辑填空",
         ],
-        "阅读理解": [
+        "片段阅读": [
             "主题词", "细节判断", "标题填入", "分述句",
             "问法", "代词", "框架题", "态度", "词语理解",
-            "主旨", "意图", "道理启示", "言语理解",
+            "主旨", "意图", "道理启示", "片段阅读",
         ],
         "语句表达": [
             "接语", "语句填空", "语句表达", "语句排序",
@@ -174,13 +214,13 @@ QUESTION_TYPE_KEYWORDS = {
             "三视图", "立体拼合", "重构类",
         ],
         "定义判断": [
-            "单定义", "多定义", "主客体",
+            "单定义", "多定义", "主客体", "定义判断",
         ],
         "类比推理": [
             "逻辑关系", "语义关系", "关联关系", "对应关系",
             "形象表达", "解释说明", "语法关系", "集合",
             "并列关系", "全同关系", "包容关系", "交叉关系",
-            "因果关系", "方式目的", "手段目的",
+            "因果关系", "方式目的", "手段目的", "类比推理",
         ],
         "逻辑判断": [
             "论证", "削弱", "加强", "前提", "论据", "论点",
@@ -191,7 +231,7 @@ QUESTION_TYPE_KEYWORDS = {
             "拆分思维", "捆绑",
             "翻译", "假言", "直言", "选言", "三段论",
             "必然性", "可能性", "平行结构", "结构相似",
-            "他因", "大前提",
+            "他因", "大前提", "逻辑判断",
         ],
     },
     "数量关系": {
@@ -200,59 +240,92 @@ QUESTION_TYPE_KEYWORDS = {
             "方程", "数列", "最值", "和差", "计算", "比值",
             "函数", "统筹", "同素", "合作", "完工",
             "给工", "给具体", "给效率", "速度", "相遇", "追及",
+            "数学运算",
         ],
     },
     "资料分析": {
-        "计算比较": [
-            "增长率", "增长量", "比重", "倍数", "平均数",
-            "基期", "现期", "计算", "比较", "简单加减",
-            "综合资料", "文字资料", "统计图", "图表",
-            "进口", "出口", "贸易", "综合", "年均",
-        ],
+        "简单计算": ["简单计算", "简单加减", "加减计算"],
+        "基期与现期": ["基期", "现期"],
+        "增长率": ["增长率", "年均增速", "混合增速", "间隔增速", "平均数的增长率"],
+        "增长量": ["增长量", "年均增长量", "平均数的增长量"],
+        "比重问题": ["比重", "比重问题", "两期比重", "基期比重", "比重差", "比重变化", "现期比重"],
+        "平均数问题": ["平均数", "平均数问题"],
+        "倍数与比值相关": ["倍数", "倍数与翻番", "倍数与比值"],
+        "文字资料": ["文字资料"],
+        "统计表": ["统计表"],
+        "统计图": ["统计图", "图表", "折线图", "柱状图", "饼图"],
+        "综合资料": ["综合资料", "综合材料", "综合分析"],
+        "综合分析": ["综合分析"],
     },
     "常识判断": {
-        "科技常识": [
-            "物理", "化学", "生物", "科技", "计算机",
-        ],
-        "人文常识": [
-            "文学", "文化", "艺术", "哲学", "宗教", "民俗",
-        ],
-        "历史地理": [
-            "历史", "中国古代", "中国近代", "世界史",
-            "地理", "天文", "气象", "节气",
-        ],
-        "法律常识": [
-            "法律", "诉讼法", "法规",
-        ],
-        "生活常识": [
-            "生活", "医学", "农业", "航天",
-        ],
-        "其他常识": [
-            "省情", "重要事件",
-        ],
+        "科技常识": ["物理", "化学", "生物", "科技", "科技常识"],
+        "人文常识": ["文学", "文化", "艺术", "民俗", "人文常识"],
+        "历史地理": ["历史", "中国古代", "中国近代", "世界史", "地理", "天文", "气象", "节气"],
+        "法律常识": ["法律", "诉讼法", "法规", "法律常识"],
+        "经济常识": ["经济常识", "宏观经济", "微观经济", "市场经济", "经济"],
+        "地理国情": ["地理国情", "省情"],
     },
     "政治理论": {
-        "时政会议": [
-            "会议", "文件", "二十大", "十九大", "政府工作报告",
-            "一号文件", "中央经济工作",
-        ],
-        "经济政策": [
-            "经济", "宏观", "微观", "市场", "贸易",
-        ],
-        "党建法治": [
-            "政治", "党建", "宪法", "法律", "行政法", "刑法",
-            "民法", "法规", "条例", "国家安全",
-        ],
-        "社会生态": [
-            "民生", "社会建设", "生态", "文化",
-        ],
-        "外交国防": [
-            "外交", "军事", "国防",
-        ],
-        "哲学思想": [
-            "唯物", "史观", "辩证法", "新思想",
-        ],
-        "其他建设": ["建设"],
+        "马克思主义": ["马克思主义", "唯物", "史观", "辩证法", "哲学"],
+        "新思想": ["新思想"],
+        "时事政治": ["时政", "时事政治", "会议", "文件", "二十大", "十九大",
+                     "政府工作报告", "一号文件", "中央经济工作", "重要会议", "重要文件", "重要事件"],
+        "毛中特": ["毛中特", "毛泽东思想", "中特", "建设", "政治建设", "经济建设",
+                  "社会建设", "文化建设", "生态建设", "党建"],
+    },
+
+    # ============ 公基 题型 ============
+    "时事政治": {
+        "时政真题": ["时政真题", "重要文件", "重要会议讲话", "重要事件"],
+        "时政模拟题": ["时政模拟题"],
+    },
+    "政治": {
+        "马克思主义哲学": ["马克思主义哲学", "唯物论", "辩证法", "认识论", "历史唯物主义"],
+        "毛泽东思想概论": ["毛泽东思想概论", "毛概"],
+        "中国特色社会主义理论体系": ["中国特色社会主义理论体系", "中特"],
+        "新思想": ["新思想"],
+        "党的基本知识": ["党的基本知识", "党史", "党建"],
+        "道德": ["道德"],
+        "科学社会主义": ["科学社会主义"],
+    },
+    "经济": {
+        "社会主义市场经济体制": ["社会主义市场经济体制", "市场经济"],
+        "宏观经济": ["宏观经济", "微观经济", "经济"],
+    },
+    "管理": {
+        "行政管理": ["行政管理", "公共管理", "管理"],
+    },
+    "公文": {
+        "公文的基本知识": ["公文", "公文的基本知识", "公文写作", "公文处理"],
+    },
+    "人文历史": {
+        "历史常识": ["历史常识", "历史", "中国古代史", "中国近代史", "世界历史"],
+        "文学常识": ["文学常识", "文学"],
+        "文化常识": ["文化常识", "文化", "艺术", "民俗"],
+        "其他（人文历史）": ["人文"],
+    },
+    "科技地理": {
+        "科技": ["科技", "生物", "化学", "物理", "计算机"],
+        "地理国情": ["地理国情", "地理"],
+    },
+    "法律": {
+        "法理学": ["法理学"],
+        "宪法": ["宪法"],
+        "刑法": ["刑法"],
+        "民法典": ["民法典", "民法"],
+        "知识产权": ["知识产权"],
+        "行政法与行政诉讼法": ["行政法", "行政法与行政诉讼法"],
+        "经济法": ["经济法"],
+        "商法": ["商法"],
+        "劳动法与社会保障法": ["劳动法", "劳动法与社会保障法"],
+        "程序法": ["程序法", "诉讼法"],
+    },
+    "其他": {
+        "计算机基础知识": ["计算机基础知识"],
+    },
+    "农业农村知识": {
+        "基层治理": ["基层治理"],
+        "三农政策法规": ["三农政策法规", "三农", "农业农村", "乡村振兴"],
     },
 }
 
@@ -265,18 +338,18 @@ def classify_question_type(point_name: str, module: str) -> str:
         module: 所属模块名
 
     Returns:
-        str: 题型名称，无法归类时返回模块名本身
+        str: 题型名称，无法归类时返回"未归类"
     """
     type_map = QUESTION_TYPE_KEYWORDS.get(module, {})
     if not type_map:
-        return module
+        return "未归类"
 
     for qtype, keywords in type_map.items():
         for kw in keywords:
             if kw in point_name:
                 return qtype
 
-    return module  # 兜底：返回模块名
+    return "未归类"  # 兜底：不再返回模块名
 
 
 def classify_module(keypoint_names: list[str]) -> dict[str, list[str]]:
@@ -615,7 +688,6 @@ def generate_init_report(db) -> str:
     time_anomaly = db.get_time_anomaly_points(limit=5)
     accuracy_gap = db.get_global_accuracy_gap(limit=10)
     guessed_count = db.get_guessed_correct_count()
-    error_dist = db.get_error_type_distribution()
 
     lines = ["# 📊 初始能力画像\n"]
 
@@ -699,15 +771,6 @@ def generate_init_report(db) -> str:
             )
     else:
         lines.append("> 考试次数不足，暂无法分析跨考薄弱趋势。\n")
-
-    # 7. 错误类型分布
-    if error_dist:
-        lines.append("\n## 七、错误类型分布\n")
-        total = sum(error_dist.values())
-        lines.append("| 错误类型 | 次数 | 占比 |")
-        lines.append("|----------|------|------|")
-        for et, cnt in sorted(error_dist.items(), key=lambda x: x[1], reverse=True):
-            lines.append(f"| {et} | {cnt} | {cnt/total:.1%} |")
 
     return '\n'.join(lines)
 
@@ -880,7 +943,6 @@ def process_report_for_init(
             'is_correct': is_correct,
             'time_spent_sec': time_spent,
             'global_correct_ratio': global_ratio,
-            'error_type': None,
             'is_guessed_correct': guessed,
             'is_time_anomaly': is_time_anom,
             'user_marked': q.get('user_marked', False),
@@ -901,7 +963,6 @@ def process_report_for_init(
                 point_name=kp_name,
                 is_correct=is_correct,
                 time_spent=time_spent or 0.0,
-                error_type=None,  # 初始化时不填错误类型
                 difficulty=difficulty,
                 global_accuracy=global_ratio,
                 exam_date=exam_info['exam_date'],
@@ -965,9 +1026,10 @@ def process_report_for_analyze(
             db.insert_pending_diagnosis(
                 question_key=q.get('key', ''),
                 report_path=file_path,
-                error_type=diag.get('error_type', '其他'),
                 confidence=diag.get('confidence', 0.0),
                 explanation=diag.get('explanation', ''),
+                specific_error=diag.get('specific_error', ''),
+                countermeasure=diag.get('countermeasure', ''),
             )
             diagnoses.append({
                 'question_key': q.get('key', ''),
@@ -976,7 +1038,6 @@ def process_report_for_analyze(
         except Exception as e:
             diagnoses.append({
                 'question_key': q.get('key', ''),
-                'error_type': '其他',
                 'confidence': 0.0,
                 'explanation': f'诊断失败：{str(e)}',
             })
@@ -1014,10 +1075,13 @@ def generate_confirmation_sheet(db, report_path: str) -> str:
             )
 
         lines.append(f"### {i}. {p['question_key']} {q_info}")
-        lines.append(f"- **AI 建议类型：** {p['error_type']}")
+        if p.get('specific_error'):
+            lines.append(f"- **错因：** {p['specific_error']}")
+        if p.get('countermeasure'):
+            lines.append(f"- **对策：** {p['countermeasure']}")
         lines.append(f"- **置信度：** {p['confidence']:.0%}")
         lines.append(f"- **理由：** {p['explanation']}")
-        lines.append(f"- **操作：** ⬜ 接受 / ✏️ 修改为：______\n")
+        lines.append(f"- **操作：** ⬜ 接受\n")
 
     return '\n'.join(lines)
 
@@ -1047,18 +1111,30 @@ STANDARD_TIME_BUDGET_120 = {
 }
 
 
-def analyze_module_timing(questions: list[dict]) -> list[dict]:
+def analyze_module_timing(questions: list[dict], exam_order: list[str] = None) -> list[dict]:
     """分析各模块的用时情况（基于真实考场策略）。
 
     评估维度：
     - 是否超预算（严格）
     - 是否挤压了其他模块时间
     - 是否存在战略性放弃（用时极少 + 高错误率）
+    - 按用户实际做题顺序分析连锁挤压
 
     Returns:
         list[dict]: [{module, question_count, actual_min, budget_min, ratio, verdict, advice}, ...]
     """
     from collections import defaultdict
+    import os as _os, json as _json
+
+    # 加载考试顺序
+    if exam_order is None:
+        config_path = _os.path.join(_os.path.dirname(__file__), '..', 'data', 'user_config.json')
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = _json.load(f)
+            exam_order = config.get('exam_order', ['政治理论', '常识判断', '言语理解与表达', '数量关系', '判断推理', '资料分析'])
+        except Exception:
+            exam_order = ['政治理论', '常识判断', '言语理解与表达', '数量关系', '判断推理', '资料分析']
 
     # 按模块统计
     mod_data = defaultdict(lambda: {'count': 0, 'total_sec': 0.0, 'wrong': 0})
@@ -1075,11 +1151,18 @@ def analyze_module_timing(questions: list[dict]) -> list[dict]:
             mod_data[mod]['wrong'] += 1
 
     # 每题预算固定，不随考试时长缩放（一道资料分析题在哪都是 ~75 秒）
+    # 按用户实际做题顺序排列
     results = []
     total_budget_sec = 0
 
-    for mod in ['政治理论', '常识判断', '言语理解与表达', '数量关系', '判断推理', '资料分析']:
-        data = mod_data.get(mod)
+    ordered_mods = [m for m in exam_order if m in mod_data]
+    # 补上没有出现在做题顺序中的模块
+    for m in mod_data:
+        if m not in ordered_mods:
+            ordered_mods.append(m)
+
+    for i, mod in enumerate(ordered_mods):
+        data = mod_data[mod]
         if not data or data['count'] == 0:
             continue
         budget_cfg = STANDARD_TIME_BUDGET_120.get(mod, {'sec_per_q': 50, 'pct': 0.1})
@@ -1108,6 +1191,7 @@ def analyze_module_timing(questions: list[dict]) -> list[dict]:
 
         results.append({
             'module': mod,
+            'order': i + 1,  # 做题顺序中的位置
             'question_count': data['count'],
             'actual_min': actual / 60,
             'budget_min': budget_sec / 60,
@@ -1120,19 +1204,30 @@ def analyze_module_timing(questions: list[dict]) -> list[dict]:
     return results
 
 
-def diagnose_report_errors(db, report_path: str) -> dict:
+def diagnose_report_errors(db, report_path: str, cancel_event=None):
     """对已入库报告的所有未诊断错题运行 LLM 批量诊断。
 
-    5 题一批，大幅降低 API 调用成本（~80% 节省）。
+    8 题一批，大幅降低 API 调用成本（~80% 节省）。
+    生成器逐批 yield 进度事件，最终 yield status='done' 的汇总结果。
 
     Args:
         db: KnowledgeDB 实例
         report_path: 已入库报告的路径
+        cancel_event: threading.Event，设置后中止后续批处理
 
-    Returns:
-        dict: {diagnosed: int, skipped: int, errors: int, batches: int}
+    进度事件:  {'status': 'progress', 'current': int, 'total': int,
+                'batches_done': int, 'total_batches': int}
+    完成事件:  {'status': 'done', 'diagnosed': int, 'skipped': int,
+                'errors': int, 'batches': int}
+    取消事件:  {'status': 'cancelled', 'diagnosed': int, ...}
     """
     from .llm import diagnose_error_batch
+
+    # 加载用户能力画像（用于个性化诊断）
+    user_profile = generate_user_profile(db)
+
+    # 清除该报告的旧诊断记录，防止重新诊断时重复累积
+    db.clear_pending_diagnoses(report_path)
 
     # 获取该报告的所有错题
     questions = db.get_questions_by_report(report_path)
@@ -1153,55 +1248,756 @@ def diagnose_report_errors(db, report_path: str) -> dict:
         except (_json.JSONDecodeError, IOError):
             pass
 
-    # 筛选未诊断的错题
+    # 收集待诊断的错题
     to_diagnose = []
     skipped = 0
     for q in wrong_qs:
-        if q.get('error_type') and q['error_type'] != '其他':
-            skipped += 1
-            continue
         rq = raw_questions.get(q.get('question_key', ''), {})
-        # 推断模块（用于批量诊断的加权提示）
+        # 推断模块和题型（用于批量诊断和整体分析）
         kps = rq.get('keypoints', [])
         kp_names = [k.get('name', '') for k in kps]
         mod_map = classify_module(list(set(kp_names))) if kp_names else {}
         mod = next(iter(mod_map.keys()), '') if mod_map else ''
-        to_diagnose.append({**rq, 'question_key_db': q.get('question_key', ''), 'module': mod})
+        qtype = classify_question_type(kp_names[0] if kp_names else '', mod) if kp_names else mod
+        to_diagnose.append({**rq, 'question_key_db': q.get('question_key', ''), 'module': mod, 'question_type': qtype})
 
     if not to_diagnose:
-        return {'diagnosed': 0, 'skipped': skipped, 'errors': 0, 'batches': 0}
+        yield {'status': 'done', 'diagnosed': 0, 'skipped': skipped, 'errors': 0, 'batches': 0}
+        return
 
     # 按题号排序（API 返回是按模块分组的，不是题号序）
     to_diagnose = sort_by_qnum(to_diagnose, key_field='source')
 
-    # 5 题一批
+    # 8 题一批
     BATCH_SIZE = 5
     batches = [to_diagnose[i:i+BATCH_SIZE] for i in range(0, len(to_diagnose), BATCH_SIZE)]
 
     diagnosed = 0
     errors = 0
+    all_diags: list[dict] = []  # 收集诊断结果用于整体分析
 
-    for batch in batches:
+    for i, batch in enumerate(batches):
+        # 检查取消信号
+        if cancel_event and cancel_event.is_set():
+            yield {
+                'status': 'cancelled',
+                'diagnosed': diagnosed,
+                'skipped': skipped,
+                'errors': errors,
+                'batches': len(batches),
+            }
+            return
+
         try:
-            results = diagnose_error_batch(batch)
+            results = diagnose_error_batch(batch, user_profile=user_profile)
 
             for q, diag in zip(batch, results):
                 qk = q.get('question_key_db') or q.get('key', '')
                 db.insert_pending_diagnosis(
                     question_key=qk,
                     report_path=report_path,
-                    error_type=diag.get('error_type', '其他'),
                     confidence=diag.get('confidence', 0.0),
                     explanation=diag.get('explanation', ''),
                     specific_error=diag.get('specific_error', ''),
+                    countermeasure=diag.get('countermeasure', ''),
                 )
                 diagnosed += 1
-        except Exception:
+                all_diags.append({
+                    'module': q.get('module', '其他'),
+                    'question_type': q.get('question_type', q.get('module', '其他')),
+                    'specific_error': diag.get('specific_error', ''),
+                })
+        except Exception as e:
+            import traceback
+            err_msg = f"第{i+1}/{len(batches)}批失败：{e}"
+            print(err_msg)
+            traceback.print_exc()
             errors += len(batch)
+            yield {'status': 'batch_error', 'msg': err_msg, 'batch': i+1}
 
-    return {
+        yield {
+            'status': 'progress',
+            'current': diagnosed + errors,
+            'total': len(to_diagnose),
+            'batches_done': i + 1,
+            'total_batches': len(batches),
+        }
+
+    # 生成整体分析
+    if diagnosed > 0:
+        yield {'status': 'summary_start', 'msg': '正在生成整体分析...'}
+        try:
+            summary = generate_exam_summary(db, report_path, all_diags, user_profile)
+            db.save_exam_summary(report_path, summary)
+            yield {'status': 'summary', 'content': summary}
+        except Exception as e:
+            yield {'status': 'summary', 'content': f'整体分析生成失败：{e}'}
+
+        # 预生成矛盾分析缓存（只刷新本次考试所属类型，不影响其他类型的缓存）
+        try:
+            exam_rec = db.get_exam_by_path(report_path)
+            et = exam_rec.get("exam_type", "行测/职测") if exam_rec else None
+            generate_contradiction_analysis(db, force=True, exam_type=et)
+        except Exception:
+            pass  # 矛盾分析失败不影响诊断主流程
+
+    yield {
+        'status': 'done',
         'diagnosed': diagnosed,
         'skipped': skipped,
         'errors': errors,
         'batches': len(batches),
     }
+
+
+# ======================== 用户画像 + 整体分析 ========================
+
+def generate_user_profile(db, force: bool = False) -> str:
+    """基于历史数据生成用户能力画像。
+
+    Args:
+        db: KnowledgeDB 实例
+        force: True 时强制重新生成，忽略缓存
+
+    Returns:
+        str: 用户画像文本（Markdown），无数据时返回空字符串
+    """
+    import os as _os
+    profile_path = _os.path.join(_os.path.dirname(__file__), '..', 'data', 'user_profile.md')
+
+    if not force and _os.path.exists(profile_path):
+        with open(profile_path, 'r', encoding='utf-8') as f:
+            cached = f.read().strip()
+            if cached:
+                return cached
+
+    from .llm import _get_client, _load_llm_config
+
+    ctx = db.get_db_context_for_chat()
+    exams = db.get_exam_records()
+    if not ctx or len(exams) < 1:
+        return ''
+
+    user_prompt = f"""基于以下考生数据，生成一份简洁的能力画像：
+
+{ctx}
+
+请描述：
+1. 整体能力定位与趋势
+2. 优势模块与薄弱模块（基于正确率数据，不要列出具体错误类型或知识点标签）
+3. 时间管理特点
+4. 优先级最高的提升方向
+
+要求：
+- 客观、数据驱动、200-300字
+- 禁止出现任何具体错误类型标签（如"概念混淆""计算失误"等）
+- 禁止列出知识点名称
+- 只讨论模块层面的表现。用中文。"""
+
+    try:
+        cfg = _load_llm_config()
+        client = _get_client()
+        resp = client.chat.completions.create(
+            model=cfg.get('model', 'deepseek-chat'),
+            messages=[
+                {'role': 'system', 'content': '你是公考备考分析师。请基于考生的历史数据生成能力画像。禁止出现任何错误类型标签（如概念混淆、计算失误等）或知识点名称，只讨论模块层面的表现。'},
+                {'role': 'user', 'content': user_prompt},
+            ],
+            max_tokens=500, temperature=0.3,
+        )
+        profile = resp.choices[0].message.content.strip()
+
+        _os.makedirs(_os.path.dirname(profile_path), exist_ok=True)
+        with open(profile_path, 'w', encoding='utf-8') as f:
+            f.write(profile)
+
+        return profile
+    except Exception:
+        return ''
+
+
+def generate_exam_summary(db, report_path: str, diagnoses: list[dict], user_profile: str = '') -> str:
+    """生成整体复盘分析（在逐题诊断完成后调用）。
+
+    分析粒度细化到模块下属题型（如 言语理解→逻辑填空），
+    结合全站正确率区分「个人薄弱」和「题目本身偏难」。
+    融入认知科学方法（元认知校准、测试效应、认知负荷）。
+
+    Args:
+        db: KnowledgeDB 实例
+        report_path: 报告路径
+        diagnoses: 诊断结果列表 [{'module': str, ...}, ...]
+        user_profile: 用户能力画像文本
+
+    Returns:
+        str: 整体分析 Markdown 文本
+    """
+    from .llm import _get_client, _load_llm_config
+
+    questions = parse_report(report_path)
+    exam_info = extract_exam_info(questions)
+    total_q = max(exam_info['total_questions'], 1)
+    correct_q = exam_info['correct_questions']
+
+    # ── 模块用时分析（含战略放弃检测）──
+    timing_results = analyze_module_timing(questions)
+    timing_summary = ''
+    for t in timing_results:
+        timing_summary += (
+            f"\n- {t.get('order', '?')}.{t['module']}：{t['question_count']}题，"
+            f"实际{t['actual_min']:.1f}分钟/预算{t['budget_min']:.1f}分钟，"
+            f"错误率{t['wrong_rate']:.0%}，{t['verdict']}（{t['advice']}）"
+        )
+
+    # ── 模块→题型粒度分析（含全站正确率对比）──
+    # 对每道题归类到 module + question_type
+    qtype_stats: dict = {}  # key=(module, qtype) → {total, correct, global_acc_sum, global_acc_count}
+    for q in questions:
+        kps = q.get('keypoints', [])
+        kp_names = [k.get('name', '') for k in kps]
+        mod_map = classify_module(list(set(kp_names))) if kp_names else {}
+        mod = next(iter(mod_map.keys()), '其他') if mod_map else '其他'
+        qtype = classify_question_type(kp_names[0] if kp_names else '', mod) if kp_names else mod
+
+        key = (mod, qtype)
+        if key not in qtype_stats:
+            qtype_stats[key] = {'total': 0, 'correct': 0, 'global_acc_sum': 0.0, 'global_acc_count': 0}
+        qtype_stats[key]['total'] += 1
+        if q.get('status') == 1:
+            qtype_stats[key]['correct'] += 1
+        gcr_raw = q.get('global_correct_ratio')
+        if gcr_raw is not None:
+            try:
+                gcr = float(gcr_raw) / 100.0  # 归一化
+                qtype_stats[key]['global_acc_sum'] += gcr
+                qtype_stats[key]['global_acc_count'] += 1
+            except (ValueError, TypeError):
+                pass
+
+    # 生成题型粒度分析文本
+    qtype_lines = []
+    for (mod, qtype), stats in sorted(qtype_stats.items()):
+        if stats['total'] < 2:
+            continue  # 样本太少不分析
+        user_acc = stats['correct'] / max(stats['total'], 1)
+        global_avg = stats['global_acc_sum'] / max(stats['global_acc_count'], 1) if stats['global_acc_count'] > 0 else None
+        gap = user_acc - global_avg if global_avg is not None else None
+
+        gap_note = ''
+        if gap is not None:
+            if gap < -0.15:
+                gap_note = f'（全站{global_avg:.0%}，你{user_acc:.0%}，⚠️ 明显低于全站——个人薄弱点）'
+            elif gap < -0.05:
+                gap_note = f'（全站{global_avg:.0%}，你{user_acc:.0%}，略低于全站）'
+            elif gap > 0.1:
+                gap_note = f'（全站{global_avg:.0%}，你{user_acc:.0%}，高于全站）'
+            else:
+                gap_note = f'（全站{global_avg:.0%}，你{user_acc:.0%}，基本持平）'
+        elif global_avg is None:
+            gap_note = '（全站数据缺失）'
+
+        qtype_lines.append(
+            f"\n- {mod} → **{qtype}**：{stats['total']}题，"
+            f"正确{stats['correct']}/{stats['total']}（{user_acc:.0%}）{gap_note}"
+        )
+
+    qtype_detail = '\n'.join(qtype_lines) if qtype_lines else '暂无题型粒度数据'
+
+    # ── 汇总错题分布 ──
+    mod_error_count: dict[str, int] = {}
+    for d in diagnoses:
+        mod = d.get('module', '其他')
+        mod_error_count[mod] = mod_error_count.get(mod, 0) + 1
+
+    diag_summary = ''
+    for mod, cnt in mod_error_count.items():
+        diag_summary += f"\n- {mod}：{cnt}道错题"
+
+    profile_text = f"\n\n【考生能力画像】\n{user_profile}" if user_profile else ''
+
+    user_prompt = f"""请对本次模考做整体复盘分析：
+
+【考试信息】
+- 试卷：{exam_info['exam_name']}
+- 成绩：{correct_q}/{total_q}（{correct_q/total_q:.1%}）
+- 总用时：{exam_info['total_time']/60:.1f}分钟
+
+【模块用时分析（考场策略视角）】
+{timing_summary}
+
+【模块→题型粒度正确率（含全站对比）】
+{qtype_detail}
+
+【错题模块分布】
+{diag_summary}
+{profile_text}
+
+请从以下角度深度分析（500-700字，Markdown格式）：
+
+1. **题型级弱点诊断**：分析模块下属题型的正确率，区分两种情况——
+   - 全站正确率也低 → 题目本身偏难或出题角度刁钻，不完全是你个人原因
+   - 全站正确率高但你做错了 → 真正的个人薄弱环节，需要优先攻克
+   举例：如果言语理解的「逻辑填空」全站正确率仅25%但你全错，说明逻辑填空本身就难；如果全站正确率70%但你全错，则说明这是你的短板。
+
+2. **时间管理诊断**：分析各模块用时和错误率的关系——
+   - 哪些模块用时远超预算但正确率没相应提高（可能在某几题上过度纠结）
+   - 哪些模块用时极少且错误率极高（战略性放弃或全蒙，需补基础）
+   - 哪些模块用时和正确率匹配合理
+
+3. **认知负荷评估**（基于认知科学）：
+   - 是否存在「高认知负荷低回报」的题型（用时多但正确率低的题型→建议优化解题策略或跳过）
+   - 是否存在「测试效应」可利用的机会（哪些题型的错题在重新测试时可能快速提升）
+   - 是否存在「元认知偏差」（用时很短但自信答对的题实际错了→说明对自己的判断不准确）
+
+4. **与历史画像的关联**：问题是否延续了一贯模式，还是出现了新情况
+
+5. **优先级建议**（按投入产出比排序）：
+   - 优先攻克：全站正确率高但你做错的题型（最大提分空间）
+   - 次要关注：全站正确率中等但你表现一般的题型
+   - 保持观察：全站正确率低的难题（短期难突破，不宜投入过多）
+   - 保持优势：你明显高于全站的题型
+
+6. **具体行动**：3-4条可立即执行的学习建议（结合间隔重复、交错练习等认知科学方法）"""
+
+    # 加载用户策略偏好
+    user_strategy_text = _load_strategy_for_prompt()
+
+    try:
+        cfg = _load_llm_config()
+        client = _get_client()
+        resp = client.chat.completions.create(
+            model=cfg.get('model', 'deepseek-chat'),
+            messages=[
+                {'role': 'system', 'content': (
+                    '你是公考备考顾问，擅长结合认知科学（间隔重复、测试效应、认知负荷理论、'
+                    '元认知校准、交错练习）进行学习诊断。\n'
+                    + user_strategy_text + '\n'
+                    '用中文，Markdown格式。分析必须精细到模块下属题型（如言语理解→逻辑填空），'
+                    '结合全站正确率区分「题目难」和「个人弱」。\n'
+                    '【语言规范】禁止使用笼统标签（如"认真做""可放弃型""粗心型"），必须说具体行为。'
+                    '禁止建议"放弃某题型"。使用"策略优化"视角，不是"考前取舍"视角。'
+                )},
+                {'role': 'user', 'content': user_prompt},
+            ],
+            max_tokens=2500, temperature=0.5,
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception as e:
+        return f'整体分析生成失败：{e}'
+
+
+def _load_strategy_for_prompt() -> str:
+    """加载用户策略偏好用于 LLM prompt。"""
+    import os as _os, json as _json
+    config_path = _os.path.join(_os.path.dirname(__file__), '..', 'data', 'user_config.json')
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = _json.load(f)
+        strategy = config.get('strategy', {})
+        state = config.get('state_management', {})
+        return (
+            f'【考生策略（必须遵守）】备考阶段：{strategy.get("prep_phase", "")}。'
+            f'备考周期：{strategy.get("prep_duration", "")}。'
+            f'目标：{strategy.get("target_score", "")}分。'
+            f'模块策略：{strategy.get("analysis_perspective", "")}。'
+            f'工作状态：{state.get("work_status", "")}。'
+            f'状态因素：{state.get("note", "")}。'
+        )
+    except Exception:
+        return ''
+
+
+# ======================== 矛盾分析（缓存） ========================
+
+def _build_xingce_prompt(latest, exam_order, timing_matrix, qtype_detail, trends, cascade,
+                         user_profile_text, strategy_text) -> tuple[str, str]:
+    """构建行测/职测的矛盾分析 prompt。"""
+    order_lines = []
+    for i, mod in enumerate(exam_order):
+        before = exam_order[:i]
+        after = exam_order[i+1:]
+        if before:
+            order_lines.append(f"- {mod}(第{i+1}位)：只能被{', '.join(before)}挤压；可能挤压{', '.join(after) if after else '无'}")
+        else:
+            order_lines.append(f"- {mod}(第{i+1}位)：不可能被任何模块挤压；可能挤压{', '.join(after)}")
+    order_note = (
+        f"用户实际做题顺序：{' → '.join(exam_order)}\n\n"
+        f"【硬约束】前序模块超时才可能挤压后序，后序模块绝不可能影响前序：\n"
+        + '\n'.join(order_lines) +
+        f"\n\n例如：资料分析(第2位)用时紧张 → 原因只能是言语理解(第1位)超时或资料分析自身难度大，"
+        f"绝不可能是判断推理(第3位)导致的。"
+    ) if exam_order else ""
+
+    data_text = f"""## 最近考试：{latest['name']}（{latest['date']}）
+成绩：{latest['correct_q']}/{latest['total_q']}（{latest['correct_q']/max(latest['total_q'],1)*100:.0f}%），用时{latest['total_time_min']}分钟
+{order_note}
+
+### 模块用时-正确率矩阵（按做题顺序）
+{_fmt_dict_table(timing_matrix)}
+
+### 题型粒度分析（含全站对比）
+{_fmt_dict_table(qtype_detail)}
+
+### 跨考试趋势（仅同类型考试比较）
+{_fmt_trend_lines(trends) if trends else '仅1场考试，暂无趋势数据'}
+
+### 连锁影响（已按做题顺序校验）
+{_fmt_cascade_lines(cascade) if cascade else '未检测到明显的连锁影响'}"""
+
+    system_prompt = f"""你是公考行测/职测备考策略专家。请对考生数据进行矛盾分析。
+
+【考生背景】{user_profile_text[:800]}
+
+【考生策略】{strategy_text}
+
+核心概念：
+- **主要矛盾**：不是"得分最低的模块"，而是制约全局的根源瓶颈。
+- **矛盾的主要方面**：同一问题中起主导作用的方面（知识短板 vs 时间分配 vs 策略问题 vs 状态因素）。
+- **矛盾的普遍性与特殊性**：全站都难=普遍性；你个人弱=特殊性（优先攻克）。
+
+时间挤压方向铁律：前序超时才可能挤压后序，后序绝不可能影响前序。
+
+【语言规范】
+- 禁止笼统标签（"认真做""可放弃型""粗心型"），必须说具体行为
+- 禁止建议"放弃某题型"，考生备考周期1年，不放弃任何模块
+- 使用"策略优化"视角，不是"考前取舍"视角
+
+分析要求：
+1. 一针见血指出当前主要矛盾（具体到模块或题型）
+2. 解释为什么它是主要矛盾
+3. 矛盾的主要方面（知识短板 vs 时间分配 vs 策略问题 vs 状态因素）
+4. 区分普遍性和特殊性矛盾
+5. 结合1年备考周期和在职状态给长期建议"""
+
+    return system_prompt, data_text
+
+
+def _build_gongji_prompt(latest, timing_matrix, qtype_detail, trends,
+                         user_profile_text, strategy_text) -> tuple[str, str]:
+    """构建公基的矛盾分析 prompt——不涉及做题顺序和时间挤压。"""
+    data_text = f"""## 最近考试：{latest['name']}（{latest['date']}）
+成绩：{latest['correct_q']}/{latest['total_q']}（{latest['correct_q']/max(latest['total_q'],1)*100:.0f}%）
+
+### 模块正确率矩阵
+{_fmt_dict_table(timing_matrix)}
+
+### 题型粒度分析（含全站对比）
+{_fmt_dict_table(qtype_detail)}
+
+### 跨考试趋势（仅同类型考试比较）
+{_fmt_trend_lines(trends) if trends else '仅1场考试，暂无趋势数据'}"""
+
+    system_prompt = f"""你是公基/综合知识备考策略专家。请对考生数据进行矛盾分析。
+
+【考生背景】{user_profile_text[:800]}
+
+【考生策略】{strategy_text}
+
+公基考试特点（与行测完全不同）：
+- 公基考察知识广度而非做题速度，时间压力通常不大
+- 不存在"做题顺序挤压"问题，各模块独立性较强
+- 核心矛盾通常是：知识储备的广度与深度之争、记忆效率与遗忘曲线的对抗、系统学习与碎片积累的平衡
+- 部分模块（时事政治、法律）分值高、提分快，是投入产出比最高的方向
+
+核心概念：
+- **主要矛盾**：不是"得分最低的模块"，而是制约全局的知识体系短板。
+- **矛盾的主要方面**：知识盲区 vs 记忆不牢 vs 理解偏差 vs 复习方法不当。
+- **矛盾的普遍性与特殊性**：全站都难=该模块需要长期积累（如科技地理）；你个人弱=可以通过系统复习快速提升（如法律常识）。
+
+【语言规范】
+- 禁止笼统标签（"认真做""可放弃型"），必须说具体行为
+- 禁止建议"放弃某模块"，考生备考周期1年，需要系统积累
+- 使用"知识体系构建"视角，不是"考前突击"视角
+- 结合在职备考的碎片时间特点给建议
+
+分析要求：
+1. 一针见血指出当前主要矛盾（具体到模块或题型），结合全站正确率区分"大家都难"和"你个人弱"
+2. 解释为什么它是主要矛盾——它如何影响整体知识体系
+3. 矛盾的主要方面：知识广度不够 vs 记忆不牢固 vs 理解深度不足
+4. 按投入产出比排序改进方向（法律/时政通常ROI最高，科技地理需要长期积累）
+5. 结合在职备考碎片时间特点，给出可执行的知识积累策略"""
+
+    return system_prompt, data_text
+
+
+# ======================== 矛盾分析（按类型缓存） ========================
+
+def generate_contradiction_analysis(db, force: bool = False, exam_type: str = None) -> dict:
+    """生成矛盾分析（按考试类型分别缓存）。
+
+    行测/职测和公基各自独立缓存，诊断新考试时只刷新对应类型的分析。
+    exam_type=None 时返回所有类型的分析，API 端点在响应中按类型分组。
+    """
+    import os as _os, json as _json
+
+    exams = db.get_exam_records()
+    if not exams:
+        return {"error": "需要至少1场考试"}
+
+    all_types = sorted(set(e.get("exam_type", "行测/职测") for e in exams))
+    target_types = [exam_type] if exam_type else all_types
+
+    results: dict = {}
+    for et in target_types:
+        type_key = et.replace("/", "").replace(" ", "_")
+        cache_path = _os.path.join(_os.path.dirname(__file__), '..', 'data', f'contradiction_cache_{type_key}.json')
+
+        type_exams = [e for e in exams if e.get("exam_type", "行测/职测") == et]
+        if not type_exams:
+            continue
+        latest_date = max(e.get("exam_date", "") for e in type_exams)
+
+        if not force and _os.path.exists(cache_path):
+            try:
+                with open(cache_path, 'r', encoding='utf-8') as f:
+                    cached = _json.load(f)
+                if cached.get("_latest_exam_date") == latest_date:
+                    results[et] = cached
+                    continue
+            except Exception:
+                pass
+
+        type_result = _generate_contra_for_type(db, et, type_exams)
+        results[et] = type_result
+
+        try:
+            _os.makedirs(_os.path.dirname(cache_path), exist_ok=True)
+            with open(cache_path, 'w', encoding='utf-8') as f:
+                _json.dump(type_result, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    if exam_type:
+        return results.get(exam_type, {"error": f"无{exam_type}类型的考试"})
+    return results
+
+
+def _generate_contra_for_type(db, exam_type: str, type_exams: list[dict]) -> dict:
+    """为指定考试类型生成矛盾分析。"""
+    import os as _os, json as _json
+    from collections import defaultdict
+
+    exams_sorted = sorted(type_exams, key=lambda e: e.get("exam_date", "") or "")
+    latest_date = max(e.get("exam_date", "") for e in type_exams)
+
+    # ── 数据收集 ──
+    exam_data = []
+    for exam in exams_sorted:
+        rp = exam.get("report_path", "")
+        if not _os.path.exists(rp):
+            continue
+        qs = db.get_questions_by_report(rp)
+        with open(rp, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+        raw_qs = data if isinstance(data, list) else data.get("questions", [])
+        q_map = {q.get("key", ""): q for q in raw_qs if isinstance(q, dict)}
+
+        mods: dict = {}
+        for qa in qs:
+            rq = q_map.get(qa.get("question_key", ""), {})
+            kps = rq.get("keypoints", [])
+            names = [k.get("name", "") for k in kps]
+            mm = classify_module(list(set(names))) if names else {}
+            mod = next(iter(mm.keys()), "其他") if mm else "其他"
+            qtype = classify_question_type(names[0] if names else "", mod) if names else mod
+            if mod not in mods:
+                mods[mod] = {"total": 0, "correct": 0, "time": 0.0, "qtypes": {}}
+            if qtype not in mods[mod]["qtypes"]:
+                mods[mod]["qtypes"][qtype] = {"total": 0, "correct": 0, "global_sum": 0.0, "global_n": 0}
+            mods[mod]["total"] += 1
+            mods[mod]["time"] += qa.get("time_spent_sec", 0) or 0
+            mods[mod]["qtypes"][qtype]["total"] += 1
+            if qa.get("is_correct"):
+                mods[mod]["correct"] += 1
+                mods[mod]["qtypes"][qtype]["correct"] += 1
+            gcr = qa.get("global_correct_ratio")
+            if gcr is not None:
+                mods[mod]["qtypes"][qtype]["global_sum"] += float(gcr) * 100
+                mods[mod]["qtypes"][qtype]["global_n"] += 1
+
+        for mod in mods:
+            m = mods[mod]
+            m["accuracy"] = round(m["correct"] / max(m["total"], 1) * 100, 1)
+            m["avg_time"] = round(m["time"] / max(m["total"], 1), 1)
+            for qt in m["qtypes"]:
+                qd = m["qtypes"][qt]
+                qd["accuracy"] = round(qd["correct"] / max(qd["total"], 1) * 100, 1)
+                qd["global_avg"] = round(qd["global_sum"] / max(qd["global_n"], 1), 1) if qd["global_n"] > 0 else None
+
+        exam_data.append({
+            "name": (exam.get("exam_name", "") or "")[:30],
+            "date": exam.get("exam_date", "") or "",
+            "total_q": exam.get("total_questions", 0) or 0,
+            "correct_q": exam.get("correct_questions", 0) or 0,
+            "total_time_min": round((exam.get("total_time_sec", 0) or 0) / 60, 1),
+            "modules": {m: {"accuracy": v["accuracy"], "avg_time": v["avg_time"],
+                             "total": v["total"], "qtypes": v["qtypes"]}
+                        for m, v in mods.items() if v["total"] >= 2},
+        })
+
+    if not exam_data:
+        return {"error": "无有效考试数据"}
+
+    latest = exam_data[-1]
+
+    # ── 加载配置 ──
+    exam_order = []
+    config_path = _os.path.join(_os.path.dirname(__file__), '..', 'data', 'user_config.json')
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = _json.load(f)
+        exam_order = config.get("exam_order", [])
+    except Exception:
+        pass
+
+    def _budget(mod):
+        b = {"常识判断": 35, "政治理论": 40, "言语理解与表达": 52,
+             "数量关系": 70, "判断推理": 55, "资料分析": 75}
+        return b.get(mod, 50)
+
+    # ── timing_matrix（按做题顺序排列）──
+    timing_matrix = []
+    for i, mod in enumerate(exam_order):
+        if mod in latest["modules"]:
+            md = latest["modules"][mod]
+            timing_matrix.append({
+                "序号": i + 1, "模块": mod, "题数": md["total"], "正确率": md["accuracy"],
+                "平均用时秒": md["avg_time"], "预算秒": _budget(mod),
+                "超支比例": round(md["avg_time"] / max(_budget(mod), 1), 2),
+            })
+    for mod, md in latest["modules"].items():
+        if mod not in exam_order:
+            timing_matrix.append({
+                "序号": 99, "模块": mod, "题数": md["total"], "正确率": md["accuracy"],
+                "平均用时秒": md["avg_time"], "预算秒": _budget(mod),
+                "超支比例": round(md["avg_time"] / max(_budget(mod), 1), 2),
+            })
+
+    # ── qtype_detail ──
+    qtype_detail = []
+    for mod, md in latest["modules"].items():
+        for qt, qd in md["qtypes"].items():
+            if qd["total"] < 2:
+                continue
+            gap = round(qd["accuracy"] - qd["global_avg"], 1) if qd["global_avg"] is not None else None
+            qtype_detail.append({
+                "模块": mod, "题型": qt, "题数": qd["total"],
+                "你的正确率": qd["accuracy"], "全站正确率": qd["global_avg"],
+                "差距": gap,
+                "判定": "个人弱" if (gap is not None and gap < -10) else (
+                    "题目难" if (gap is not None and gap > -10 and qd["global_avg"] is not None and qd["global_avg"] < 40) else "正常"),
+            })
+
+    # ── trends（已限定同类型考试）──
+    trends = []
+    if len(exam_data) >= 2:
+        all_mods = set()
+        for ed in exam_data:
+            all_mods.update(ed["modules"].keys())
+        for mod in sorted(all_mods):
+            pts = []
+            for ed in exam_data:
+                if mod in ed["modules"]:
+                    pts.append({"考试": ed["name"][:12], "日期": ed["date"], "正确率": ed["modules"][mod]["accuracy"]})
+            if len(pts) >= 2:
+                delta = pts[-1]["正确率"] - pts[0]["正确率"]
+                trends.append({"模块": mod, "趋势": pts, "变化": round(delta, 1),
+                               "方向": "↑提升" if delta > 5 else ("↓下降" if delta < -5 else "→持平")})
+
+    # ── cascade（仅行测/职测适用，公基跳过）──
+    cascade = []
+    if exam_type != '公基':
+        for i, mod in enumerate(exam_order):
+            if mod not in latest["modules"]:
+                continue
+            md = latest["modules"][mod]
+            time_ratio = md["avg_time"] / max(_budget(mod), 1)
+            if time_ratio > 1.2 and md["accuracy"] < 65:
+                victims = []
+                for mod2 in exam_order[i+1:]:
+                    if mod2 in latest["modules"]:
+                        md2 = latest["modules"][mod2]
+                        if md2["avg_time"] < _budget(mod2) * 0.75 and md2["accuracy"] < 70:
+                            victims.append(f"{mod2}(仅{md2['avg_time']:.0f}秒/预算{_budget(mod2):.0f}秒)")
+                if victims:
+                    cascade.append({
+                        "超时模块": f"{i+1}.{mod}", "超时倍数": round(time_ratio, 1),
+                        "正确率": md["accuracy"], "可能挤压的模块": victims,
+                        "分析": f"按做题顺序，{mod}(第{i+1}位)超时后，排在后面的模块被迫加速",
+                    })
+
+    # ── LLM 分析 ──
+    ai_analysis = ""
+    try:
+        from .llm import _get_client, _load_llm_config
+        cfg = _load_llm_config()
+        client = _get_client()
+
+        user_profile_text = ""
+        profile_path = _os.path.join(_os.path.dirname(__file__), '..', 'data', 'user_profile.md')
+        try:
+            with open(profile_path, 'r', encoding='utf-8') as f:
+                user_profile_text = f.read().strip()
+        except Exception:
+            pass
+
+        strategy_text = _load_strategy_for_prompt()
+
+        if exam_type == '公基':
+            system_prompt, data_text = _build_gongji_prompt(
+                latest, timing_matrix, qtype_detail, trends, user_profile_text, strategy_text)
+        else:
+            system_prompt, data_text = _build_xingce_prompt(
+                latest, exam_order, timing_matrix, qtype_detail, trends, cascade,
+                user_profile_text, strategy_text)
+
+        resp = client.chat.completions.create(
+            model=cfg.get("model", "deepseek-chat"),
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"请对以下考生数据进行矛盾分析：\n\n{data_text}"},
+            ],
+            max_tokens=2000, temperature=0.5,
+        )
+        ai_analysis = resp.choices[0].message.content.strip()
+    except Exception as e:
+        ai_analysis = f"AI分析暂不可用：{e}"
+
+    return {
+        "_latest_exam_date": latest_date,
+        "_exam_type": exam_type,
+        "latest_exam": {"name": latest["name"], "date": latest["date"],
+                        "score": f"{latest['correct_q']}/{latest['total_q']}"},
+        "timing_matrix": timing_matrix,
+        "qtype_detail": qtype_detail,
+        "trends": trends,
+        "cascade": cascade,
+        "analysis": ai_analysis,
+    }
+
+
+def _fmt_dict_table(rows: list[dict]) -> str:
+    if not rows:
+        return "无数据"
+    keys = list(rows[0].keys())
+    header = "| " + " | ".join(str(k) for k in keys) + " |"
+    sep = "|" + "|".join(["---" for _ in keys]) + "|"
+    body = "\n".join("| " + " | ".join(str(r.get(k, "")) for k in keys) + " |" for r in rows)
+    return header + "\n" + sep + "\n" + body
+
+
+def _fmt_trend_lines(trends: list[dict]) -> str:
+    lines = []
+    for t in trends:
+        pts_str = " → ".join(f"{p['考试']}({p['正确率']}%)" for p in t["趋势"])
+        lines.append(f"- {t['模块']}：{pts_str} | {t['方向']}{t['变化']}%")
+    return "\n".join(lines)
+
+
+def _fmt_cascade_lines(cascade: list[dict]) -> str:
+    lines = []
+    for c in cascade:
+        lines.append(f"- {c['超时模块']}超时{c['超时倍数']}倍（正确率仅{c['正确率']}%），可能挤压了：{', '.join(c['可能挤压的模块'])}")
+        if c.get('分析'):
+            lines.append(f"  → {c['分析']}")
+    return "\n".join(lines)

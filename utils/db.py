@@ -77,6 +77,11 @@ class KnowledgeDB:
                 exam_type TEXT DEFAULT '行测'
             )
         """)
+        # 迁移：exam_summary 列
+        try:
+            cursor.execute("ALTER TABLE exam_records ADD COLUMN exam_summary TEXT DEFAULT ''")
+        except Exception:
+            pass
 
         # 单题分析表
         cursor.execute("""
@@ -113,6 +118,17 @@ class KnowledgeDB:
                 created_at TEXT DEFAULT (datetime('now', 'localtime'))
             )
         """)
+        # 迁移：添加 specific_error 列（兼容旧表）
+        try:
+            cursor.execute("ALTER TABLE pending_diagnosis ADD COLUMN specific_error TEXT DEFAULT ''")
+        except Exception:
+            pass  # 列已存在，忽略
+
+        # 迁移：添加 countermeasure 列（兼容旧表）
+        try:
+            cursor.execute("ALTER TABLE pending_diagnosis ADD COLUMN countermeasure TEXT DEFAULT ''")
+        except Exception:
+            pass  # 列已存在，忽略
 
         self.conn.commit()
 
@@ -247,7 +263,6 @@ class KnowledgeDB:
         point_name: str,
         is_correct: bool = False,
         time_spent: float = 0.0,
-        error_type: str = None,
         difficulty: str = None,
         global_accuracy: float = None,
         exam_date: str = None,
@@ -269,9 +284,6 @@ class KnowledgeDB:
 
         if row is None:
             # 插入新记录
-            error_dist = {}
-            if error_type:
-                error_dist[error_type] = 1
             diff_dist = {}
             if difficulty:
                 diff_dist[difficulty] = 1
@@ -280,16 +292,15 @@ class KnowledgeDB:
                 INSERT INTO knowledge_points
                     (module, point_name, full_label, total_occurrences,
                      correct_count, total_time_sec, time_squared_sum,
-                     error_type_distribution, difficulty_distribution,
+                     difficulty_distribution,
                      global_accuracy_sum, global_accuracy_count,
                      last_seen_date, trend_data, question_type)
-                VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 module, point_name, full_label,
                 1 if is_correct else 0,
                 time_spent or 0.0,
                 (time_spent or 0.0) ** 2,
-                json.dumps(error_dist, ensure_ascii=False),
                 json.dumps(diff_dist, ensure_ascii=False),
                 global_accuracy if global_accuracy is not None else 0.0,
                 1 if global_accuracy is not None else 0,
@@ -304,11 +315,6 @@ class KnowledgeDB:
             new_correct = row_dict['correct_count'] + (1 if is_correct else 0)
             new_time = (row_dict['total_time_sec'] or 0.0) + (time_spent or 0.0)
             new_time_sq = (row_dict['time_squared_sum'] or 0.0) + (time_spent or 0.0) ** 2
-
-            # 更新错误类型分布
-            error_dist = json.loads(row_dict['error_type_distribution'] or '{}')
-            if error_type:
-                error_dist[error_type] = error_dist.get(error_type, 0) + 1
 
             # 更新难度分布
             diff_dist = json.loads(row_dict['difficulty_distribution'] or '{}')
@@ -332,14 +338,13 @@ class KnowledgeDB:
                 UPDATE knowledge_points SET
                     total_occurrences = ?, correct_count = ?,
                     total_time_sec = ?, time_squared_sum = ?,
-                    error_type_distribution = ?, difficulty_distribution = ?,
+                    difficulty_distribution = ?,
                     global_accuracy_sum = ?, global_accuracy_count = ?,
                     last_seen_date = ?, trend_data = ?,
                     question_type = COALESCE(NULLIF(?, ''), question_type)
                 WHERE full_label = ?
             """, (
                 new_total, new_correct, new_time, new_time_sq,
-                json.dumps(error_dist, ensure_ascii=False),
                 json.dumps(diff_dist, ensure_ascii=False),
                 new_ga_sum, new_ga_count,
                 exam_date or datetime.now().strftime('%Y-%m-%d'),
@@ -511,6 +516,25 @@ class KnowledgeDB:
         self.conn.commit()
         return cursor.lastrowid
 
+    def save_exam_summary(self, report_path: str, summary: str):
+        """保存整体诊断报告到 exam_records。"""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "UPDATE exam_records SET exam_summary = ? WHERE report_path = ?",
+            (summary, report_path)
+        )
+        self.conn.commit()
+
+    def get_exam_summary(self, report_path: str) -> str:
+        """获取已保存的整体诊断报告。"""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT exam_summary FROM exam_records WHERE report_path = ?",
+            (report_path,)
+        )
+        row = cursor.fetchone()
+        return (row[0] or '') if row else ''
+
     def update_exam_date(self, report_path: str, new_date: str):
         """更新模考记录的考试日期。"""
         cursor = self.conn.cursor()
@@ -679,67 +703,25 @@ class KnowledgeDB:
         )
         self.conn.commit()
 
-    # -- 以下是针对知识点的错误类型分布字段的回填操作 --
-    def update_kp_error_type_distribution(self, full_label: str, error_type: str):
-        """在知识点的 error_type_distribution JSON 中给指定类型 +1。"""
-        kp = self.get_knowledge_point(full_label)
-        if not kp:
-            return
-        dist = json.loads(kp.get('error_type_distribution') or '{}')
-        dist[error_type] = dist.get(error_type, 0) + 1
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "UPDATE knowledge_points SET error_type_distribution = ? WHERE full_label = ?",
-            (json.dumps(dist, ensure_ascii=False), full_label)
-        )
-        self.conn.commit()
-
-    def get_error_type_distribution(self) -> dict:
-        """获取全局错误类型分布（合并所有知识点）。"""
-        points = self.get_all_knowledge_points()
-        merged = {}
-        for kp in points:
-            dist = json.loads(kp.get('error_type_distribution') or '{}')
-            for et, count in dist.items():
-                merged[et] = merged.get(et, 0) + count
-        return merged
-
-    def get_error_type_by_module(self) -> list[dict]:
-        """按模块→题型获取错误类型分布。
-
-        Returns:
-            list[dict]: [{module, question_type, error_type, count}, ...]
-        """
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "SELECT module, question_type, error_type_distribution FROM knowledge_points"
-        )
-        rows = cursor.fetchall()
-        result = {}
-        for r in rows:
-            mod = r[0] or '未知'
-            qt = r[1] or mod
-            dist = json.loads(r[2] or '{}')
-            for et, count in dist.items():
-                key = (mod, qt, et)
-                result[key] = result.get(key, 0) + count
-        return [
-            {'module': mod, 'question_type': qt, 'error_type': et, 'count': c}
-            for (mod, qt, et), c in sorted(result.items(), key=lambda x: -x[1])
-        ]
-
     # ======================== 诊断确认操作 ========================
 
+    def clear_pending_diagnoses(self, report_path: str):
+        """删除指定报告的所有待确认诊断（重新诊断前调用）。"""
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM pending_diagnosis WHERE report_path = ?", (report_path,))
+        self.conn.commit()
+
     def insert_pending_diagnosis(self, question_key: str, report_path: str,
-                                  error_type: str, confidence: float,
-                                  explanation: str, specific_error: str = ''):
+                                  confidence: float,
+                                  explanation: str, specific_error: str = '',
+                                  countermeasure: str = ''):
         """插入待确认的诊断结果。"""
         cursor = self.conn.cursor()
         cursor.execute("""
             INSERT INTO pending_diagnosis
-                (question_key, report_path, error_type, confidence, explanation, specific_error)
+                (question_key, report_path, confidence, explanation, specific_error, countermeasure)
             VALUES (?, ?, ?, ?, ?, ?)
-        """, (question_key, report_path, error_type, confidence, explanation, specific_error))
+        """, (question_key, report_path, confidence, explanation, specific_error, countermeasure))
         self.conn.commit()
 
     def get_pending_diagnoses(self, report_path: str = None) -> list[dict]:
@@ -761,8 +743,8 @@ class KnowledgeDB:
             )
             return [dict(row) for row in cursor.fetchall()]
 
-    def confirm_diagnosis(self, diagnosis_id: int, final_error_type: str = None):
-        """确认诊断结果并写入 question_analysis 和 knowledge_points。"""
+    def confirm_diagnosis(self, diagnosis_id: int):
+        """确认诊断结果并标记为已确认。"""
         cursor = self.conn.cursor()
         cursor.execute(
             "SELECT * FROM pending_diagnosis WHERE id = ?",
@@ -772,96 +754,13 @@ class KnowledgeDB:
         if not row:
             return
 
-        row_dict = dict(row)
-        error_type = final_error_type or row_dict['error_type']
-
-        # 更新 question_analysis
-        cursor.execute(
-            "UPDATE question_analysis SET error_type = ? WHERE question_key = ?",
-            (error_type, row_dict['question_key'])
-        )
-
         # 标记已确认
         cursor.execute(
-            "UPDATE pending_diagnosis SET is_confirmed = 1, error_type = ? WHERE id = ?",
-            (error_type, diagnosis_id)
+            "UPDATE pending_diagnosis SET is_confirmed = 1 WHERE id = ?",
+            (diagnosis_id,)
         )
 
-        # 同步更新知识点错误类型分布
-        qa = self.get_question_by_key(row_dict['question_key'])
-        if qa and qa.get('report_key'):
-            self._sync_kp_error_type(qa['report_key'], row_dict['question_key'], error_type)
-
         self.conn.commit()
-
-    def _sync_kp_error_type(self, report_path: str, question_key: str, error_type: str):
-        """根据题目 key 找到对应知识点，更新其 error_type_distribution。"""
-        import json as _json
-        import os as _os
-        from .analysis import classify_module, classify_question_type
-
-        # 兼容相对/绝对路径
-        file_path = report_path
-        if not _os.path.exists(file_path):
-            abs_path = _os.path.abspath(report_path)
-            if _os.path.exists(abs_path):
-                file_path = abs_path
-            else:
-                return
-
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                questions = _json.load(f)
-            if isinstance(questions, dict):
-                questions = questions.get('questions', questions.get('data', []))
-            if not isinstance(questions, list):
-                return
-        except (_json.JSONDecodeError, IOError):
-            return
-
-        # 找到对应题目
-        target_q = None
-        for q in questions:
-            if not isinstance(q, dict):
-                continue
-            if q.get('key', '') == question_key:
-                target_q = q
-                break
-        if not target_q:
-            return
-
-        kps = target_q.get('keypoints', [])
-        if not kps:
-            return
-
-        # 归类并更新每个知识点
-        all_names = [kp.get('name', '') for kp in kps]
-        mod_map = classify_module(list(set(all_names)))
-        name_to_mod = {}
-        for mod, names in mod_map.items():
-            for n in names:
-                name_to_mod[n] = mod
-
-        cursor = self.conn.cursor()
-        for kp in kps:
-            kp_name = kp.get('name', '')
-            if not kp_name:
-                continue
-            mod = name_to_mod.get(kp_name, '其他')
-            full_label = f"{mod}-{kp_name}"
-
-            cursor.execute(
-                "SELECT error_type_distribution FROM knowledge_points WHERE full_label = ?",
-                (full_label,)
-            )
-            row = cursor.fetchone()
-            if row:
-                dist = _json.loads(row[0] or '{}')
-                dist[error_type] = dist.get(error_type, 0) + 1
-                cursor.execute(
-                    "UPDATE knowledge_points SET error_type_distribution = ? WHERE full_label = ?",
-                    (_json.dumps(dist, ensure_ascii=False), full_label)
-                )
 
     # ======================== 笔记操作 ========================
 
@@ -935,8 +834,6 @@ class KnowledgeDB:
             str: 格式化的统计信息文本
         """
         modules = self.get_modules_summary()
-        weak = self.get_weak_points(limit=10)
-        error_dist = self.get_error_type_distribution()
         guessed = self.get_guessed_correct_count()
         exams = self.get_exam_records()
 
@@ -951,22 +848,8 @@ class KnowledgeDB:
                 f"平均用时 {m['avg_time']:.1f}秒"
             )
 
-        # 薄弱知识点
-        lines.append("\n### 薄弱知识点 Top 10")
-        for i, w in enumerate(weak, 1):
-            lines.append(
-                f"{i}. {w['full_label']}：{w['error_count']}/{w['total_occurrences']}错，"
-                f"正确率 {w['accuracy']:.1%}"
-            )
-
-        # 错误类型分布
-        if error_dist:
-            lines.append("\n### 错误类型分布")
-            total_errors = sum(error_dist.values())
-            for et, cnt in sorted(error_dist.items(), key=lambda x: x[1], reverse=True):
-                lines.append(f"- {et}：{cnt}次（{cnt/total_errors:.1%}）")
-
         lines.append(f"\n### 蒙对题总数：{guessed}")
+        lines.append("\n注意：分析时只使用模块正确率和用时数据。禁止列出任何错误类型标签、知识点名称、或其他分类标签。聚焦于整体表现和可操作建议。")
 
         return '\n'.join(lines)
 

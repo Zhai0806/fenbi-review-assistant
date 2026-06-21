@@ -104,7 +104,7 @@ export default function WrongBank() {
           {submitted && (
             <div style={{ marginTop: 12, padding: 8, background: "#f5f5f5", borderRadius: 4 }}>
               <p>🖊 你的: {idxToLetter(q.your_answer)} | ✅ 正确: {idxToLetter(q.correct_answer)}</p>
-              <p>原错因: {q.error_type || "未标注"} | 用时: {q.time_sec}s</p>
+              <p>用时: {q.time_sec}s</p>
             </div>
           )}
 

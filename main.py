@@ -240,19 +240,19 @@ def cmd_confirm(args):
             )
 
         print(f"[{i}/{len(pending)}] {p['question_key']} {q_info}")
-        print(f"   AI 建议：{p['error_type']}（置信度 {p['confidence']:.0%}）")
-        print(f"   理由：{p['explanation']}")
+        if p.get('specific_error'):
+            print(f"   错因：{p['specific_error']}")
+        if p.get('countermeasure'):
+            print(f"   对策：{p['countermeasure']}")
+        print(f"   置信度：{p['confidence']:.0%}")
 
-        choice = input("   接受？[Y/n/输入新类型]：").strip()
+        choice = input("   接受？[Y/n]：").strip()
         if choice.lower() == 'n':
             print("   ⏭️ 跳过")
             continue
-        elif choice == '' or choice.lower() == 'y':
+        else:
             db.confirm_diagnosis(p['id'])
             print("   ✅ 已确认")
-        else:
-            db.confirm_diagnosis(p['id'], final_error_type=choice)
-            print(f"   ✅ 已修改为：{choice}")
 
     db.close()
     print("\n✅ 确认完成！")

@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import { Input, Button, List, Select, Space, message, Spin, Card } from "antd";
 import { PlusOutlined, DeleteOutlined } from "@ant-design/icons";
+import { marked } from "marked";
 import api from "../api/client";
 
 export default function AIChat() {
@@ -10,21 +11,23 @@ export default function AIChat() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const chatAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    api.get("/chat/conversations").then((r) => {
+    api.get("/chat/conversations").then(async (r) => {
       const cs = r.data;
       setConvs(cs);
       const active = cs.find((c: any) => c.active) || cs[0];
       if (active) {
         setActiveId(active.id);
-        loadMessages(active.id);
+        // Load messages for the active conversation
+        const mr = await api.post(`/chat/conversations/${active.id}/activate`);
+        setMessages(mr.data.messages || []);
       }
     });
   }, []);
 
   const loadMessages = (cid: string) => {
-    // Messages are loaded when activated - store in convs
     api.get(`/chat/conversations`).then((r) => {
       setConvs(r.data);
     });
@@ -35,14 +38,25 @@ export default function AIChat() {
     setLoading(true);
     setMessages((m) => [...m, { role: "user", content: input }]);
     const q = input; setInput("");
+    const controller = new AbortController();
+    chatAbortRef.current = controller;
     try {
-      const r = await api.post("/chat/send", { query: q });
+      const r = await api.post("/chat/send", { query: q }, { signal: controller.signal });
       setMessages(r.data.messages);
     } catch (e: any) {
-      message.error(e?.response?.data?.detail || "发送失败");
+      if (e.name === 'CanceledError' || e.code === 'ERR_CANCELED') {
+        // 用户主动取消，消息已保存到后端，刷新即可
+      } else {
+        message.error(e?.response?.data?.detail || "发送失败");
+      }
     }
     setLoading(false);
+    chatAbortRef.current = null;
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  const cancelSend = () => {
+    chatAbortRef.current?.abort();
   };
 
   const newConv = async () => {
@@ -55,9 +69,9 @@ export default function AIChat() {
   };
 
   const switchConv = async (cid: string) => {
-    await api.post(`/chat/conversations/${cid}/activate`);
+    const r = await api.post(`/chat/conversations/${cid}/activate`);
     setActiveId(cid);
-    setMessages([]); // Will be populated on next send
+    setMessages(r.data.messages || []);
   };
 
   const delConv = async (cid: string) => {
@@ -93,7 +107,9 @@ export default function AIChat() {
                 borderBottomRightRadius: m.role === "user" ? 4 : 16,
                 borderBottomLeftRadius: m.role === "user" ? 16 : 4,
               }}>
-                {m.content}
+                {m.role === "user" ? m.content : (
+                  <div dangerouslySetInnerHTML={{ __html: marked.parse(m.content, { breaks: true }) as string }} />
+                )}
               </div>
             </div>
           ))}
@@ -102,8 +118,16 @@ export default function AIChat() {
         </div>
         <div style={{ padding: "8px 0", borderTop: "1px solid #eee" }}>
           <Space.Compact style={{ width: "100%" }}>
-            <Input value={input} onChange={(e) => setInput(e.target.value)} onPressEnter={send} placeholder="输入问题..." />
-            <Button type="primary" onClick={send} loading={loading}>发送</Button>
+            <Input.TextArea value={input} onChange={(e) => setInput(e.target.value)}
+              onPressEnter={(e) => { if (!e.shiftKey) { e.preventDefault(); send(); } }}
+              placeholder="输入问题...（Enter发送，Shift+Enter换行）"
+              autoSize={{ minRows: 1, maxRows: 6 }}
+              style={{ resize: 'none' }} />
+            {loading ? (
+              <Button danger onClick={cancelSend}>停止</Button>
+            ) : (
+              <Button type="primary" onClick={send}>发送</Button>
+            )}
           </Space.Compact>
         </div>
       </div>

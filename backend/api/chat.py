@@ -72,10 +72,13 @@ def delete_conversation(conv_id: str):
 @router.post("/chat/conversations/{conv_id}/activate")
 def activate_conversation(conv_id: str):
     data = _load_chat_data()
+    conv = None
     for c in data.get("conversations", []):
         c["active"] = c["id"] == conv_id
+        if c["active"]:
+            conv = c
     _save_chat_data(data)
-    return {"ok": True}
+    return {"ok": True, "messages": conv.get("messages", []) if conv else []}
 
 
 class ChatMsg(BaseModel):

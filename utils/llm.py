@@ -71,7 +71,8 @@ def _default_system_prompt() -> str:
 
 ## 输出格式
 请以 JSON 格式输出，包含以下字段：
-- error_type: 错误类型，必须是以下之一：计算失误、公式用错、概念混淆、审题不清、时间不足蒙的、记忆盲区、放弃、其他
+- specific_error: 一句话说清错在哪
+- countermeasure: 一句可执行的对策/技巧，告诉考生下次怎么避免
 - confidence: 置信度，0.0~1.0 之间的浮点数
 - explanation: 简要诊断理由，不超过100字
 
@@ -106,7 +107,7 @@ def diagnose_error(
         retry: 重试次数
 
     Returns:
-        dict: {"error_type": str, "confidence": float, "explanation": str}
+        dict: {"specific_error": str, "countermeasure": str, "confidence": float, "explanation": str}
     """
     # 清理 HTML 标签，获取纯文本
     content_text = _strip_html(content)
@@ -157,12 +158,12 @@ def diagnose_error(
             result = json.loads(result_text)
 
             # 验证必需字段
-            if 'error_type' not in result or 'confidence' not in result:
+            if 'confidence' not in result:
                 raise ValueError("LLM 返回缺少必需字段")
 
-            # 标准化 error_type
-            result['error_type'] = _normalize_error_type(result['error_type'])
             result.setdefault('explanation', '')
+            result.setdefault('countermeasure', '')
+            result.setdefault('specific_error', '')
             return result
 
         except Exception as e:
@@ -173,9 +174,10 @@ def diagnose_error(
 
     # 所有重试都失败，返回默认值
     return {
-        "error_type": "其他",
         "confidence": 0.0,
         "explanation": f"LLM 调用失败（{str(last_error)}），请人工判断",
+        "specific_error": "",
+        "countermeasure": "",
     }
 
 
@@ -313,9 +315,11 @@ def chat_with_context(
 
 请基于以上数据回答考生的问题。你的建议应该：
 1. 数据驱动：引用具体数字和趋势
-2. 个性化：针对考生的薄弱环节
+2. 聚焦模块层面分析，禁止罗列具体知识点名称（如"前后呼应""混搭填空"等）和错误类型标签（如"概念混淆""计算失误"等）
 3. 可操作：给出具体的学习建议和计划
-4. 鼓励性：保持积极正面的语气"""
+4. 鼓励性：保持积极正面的语气
+
+回复格式要求：使用 Markdown 格式组织内容，适当使用标题、列表、加粗等增强可读性。"""
 
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -369,17 +373,19 @@ def _idx_to_label(idx: str) -> str:
 def diagnose_error_batch(
     questions: list[dict],
     retry: int = 2,
+    user_profile: str = '',
 ) -> list[dict]:
-    """批量诊断多道错题（5 道一批，大幅节省 token）。
+    """批量诊断多道错题（8 道一批，大幅节省 token）。
 
-    将最多 5 道题打包为一个 API 调用，共享 system prompt，
+    将最多 8 道题打包为一个 API 调用，共享 system prompt，
     相比逐题调用降低约 80% 成本。
 
     Args:
         questions: 题目列表，每项含 content, options, your_answer,
                    correct_answer, solution, keypoints, time_spent_sec,
-                   可选 module（模块名，用于加权诊断）
+                   global_correct_ratio, 可选 module
         retry: 重试次数
+        user_profile: 用户能力画像文本，用于个性化诊断
 
     Returns:
         list[dict]: 与输入同序的诊断结果
@@ -387,64 +393,93 @@ def diagnose_error_batch(
     if not questions:
         return []
 
-    # 模块→默认错因 映射
-    MODULE_DEFAULT = {
-        '常识判断': '记忆盲区', '政治理论': '记忆盲区',
-        '资料分析': '计算失误', '数量关系': '公式用错',
-        '言语理解与表达': '审题不清', '判断推理': '概念混淆',
-    }
-
-    # 构建紧凑的批量消息
+    # 构建紧凑的批量消息（含难度信息 + 选项全文）
     items = []
     for i, q in enumerate(questions):
-        content = _strip_html(q.get('content', ''))[:250]
-        opts = [_strip_html(o)[:50] for o in q.get('options', [])]
-        sol = _strip_html(q.get('solution', ''))[:150]
+        content = _strip_html(q.get('content', ''))[:300]
+        raw_opts = q.get('options', [])
+        opts = [_strip_html(o)[:80] for o in raw_opts]
+        sol = _strip_html(q.get('solution', ''))[:300]
         kps = [k.get('name', '') for k in q.get('keypoints', [])]
         label_map = {'0': 'A', '1': 'B', '2': 'C', '3': 'D'}
         mod = q.get('module', '')
         mod_hint = f"模块={mod}，" if mod else ''
 
+        # 考生选错的选项
+        your_idx = str(q.get('your_answer', ''))
+        your_label = label_map.get(your_idx, '?')
+        your_opt_text = opts[int(your_idx)] if your_idx.isdigit() and int(your_idx) < len(opts) else ''
+        correct_idx = str(q.get('correct_answer', ''))
+        correct_label = label_map.get(correct_idx, '?')
+        correct_opt_text = opts[int(correct_idx)] if correct_idx.isdigit() and int(correct_idx) < len(opts) else ''
+
+        # 难度标记
+        gcr = q.get('global_correct_ratio')
+        diff_hint = ''
+        if gcr is not None:
+            try:
+                gcr_val = float(gcr)
+                if gcr_val < 20:
+                    diff_hint = f' [全站正确率仅{gcr_val:.0f}%，极难题]'
+                elif gcr_val < 40:
+                    diff_hint = f' [全站正确率{gcr_val:.0f}%，偏难题]'
+                elif gcr_val >= 80:
+                    diff_hint = f' [全站正确率{gcr_val:.0f}%，简单题不应错]'
+            except (ValueError, TypeError):
+                pass
+
         item = (
-            f"题{i+1}：{mod_hint}{content}\n"
+            f"题{i+1}：{mod_hint}{content}{diff_hint}\n"
             f"选项：{' | '.join(f'{chr(65+j)}.{o}' for j, o in enumerate(opts))}\n"
-            f"答：{label_map.get(str(q.get('your_answer','')), '?')} "
-            f"正解：{label_map.get(str(q.get('correct_answer','')), '?')} "
-            f"知识点：{','.join(kps[:3])} "
-            f"用时：{q.get('time_spent_sec','?')}秒"
+            f"考生选了{your_label}：\"{your_opt_text}\" | 正确答案{correct_label}：\"{correct_opt_text}\"\n"
+            f"知识点：{','.join(kps[:3])} | 用时：{q.get('time_spent_sec','?')}秒"
         )
         if sol:
-            item += f"\n解析摘要：{sol}"
+            item += f"\n解析：{sol}"
         items.append(item)
 
     batch_text = '\n\n---\n\n'.join(items)
     user_message = (
         f"诊断以下 {len(questions)} 道行测错题的错误原因。"
-        f"输出 JSON，每道题 error_type（计算失误/公式用错/概念混淆/审题不清/时间不足蒙的/记忆盲区/放弃）、"
-        f"confidence（0~1）和 explanation（≤40字）：\n\n{batch_text}"
+        f"输出 JSON，每道题 specific_error（一句话说清错在哪）、countermeasure（一句可执行的对策/技巧，告诉考生下次怎么避免，20-60字）、"
+        f"explanation（为什么错，20-60字）、confidence（0~1）：\n\n{batch_text}"
     )
 
+    profile_section = ''
+    if user_profile:
+        profile_section = (
+            f"\n\n【考生能力画像】\n{user_profile}\n"
+            f"请结合画像进行个性化诊断：如果某错题符合画像中的薄弱模式，请在explanation中指出；"
+            f"如果是新出现的错误，请指出需要关注。"
+        )
+
     system_prompt = (
-        "你是公考行测辅导专家。请深度诊断每道错题的错误原因。\n"
-        "对每道题输出：\n"
-        "1. error_type：从「计算失误/公式用错/概念混淆/审题不清/时间不足蒙的/记忆盲区/放弃」中选一个最匹配的\n"
-        "2. specific_error：一句话具体描述错在哪（如\"混淆了环比与同比的定义\"，而非笼统的\"概念混淆\"）\n"
-        "3. explanation：详细分析——\"你选X可能是因为...但正确答案Y的原因是...两者区别在于...\"（40-100字）\n"
-        "4. confidence：0-1置信度\n\n"
-        "模块默认判断规则：\n"
-        "- 常识判断/政治理论：优先「记忆盲区」\n"
-        "- 资料分析：优先「计算失误」或「公式用错」\n"
-        "- 数量关系：优先「公式用错」或「计算失误」\n"
-        "- 言语理解与表达：优先「审题不清」或「概念混淆」\n"
-        "- 判断推理：优先「概念混淆」或「审题不清」\n"
-        "用时<10秒且无推理→「时间不足蒙的」\n\n"
-        "诊断要具体可操作——看完分析后考生能明白自己为什么错、下次怎么避免。\n"
-        '输出 JSON：{"items":[{"error_type":"概念混淆","specific_error":"混淆了环比与同比","explanation":"你选A可能是因为看到增长率就按同比算了，但题目给的是上月数据，应该用环比。同比是和去年同期比，环比是和上个月比。","confidence":0.85},...]}'
+        "你是公考行测辅导专家。对每道错题进行深度诊断。\n\n"
+        "【诊断方法】先推理后判断：\n"
+        "1. 先看正确答案的选项内容，理解正确解法应该是什么\n"
+        "2. 再看考生选错的选项内容，分析选了它说明考生走了哪条错误路径\n"
+        "3. 结合用时和全站正确率，判断错误的根本原因\n\n"
+        "【常见错误路径对照】\n"
+        "- 选错选项与正确选项含义相反 → 审题时忽略了否定词/提问方向\n"
+        "- 选错选项是某个中间计算结果 → 公式步骤不完整，差最后一步\n"
+        "- 选错选项与正确选项是同类但不同对象 → 概念区分不清（如环比vs同比）\n"
+        "- 选错选项是题干中出现的数字 → 直接抄数，没做任何计算\n"
+        "- 用时极短（<10秒）+全站正确率高 → 可能是蒙的或根本没读题\n"
+        "- 用时正常但选了明显不相关的选项 → 知识点完全不会，凭感觉猜\n\n"
+        "对每道题输出以下字段：\n"
+        "- specific_error：一句话说清错在哪个步骤（必须结合考生具体选错的选项内容来分析，不要泛泛说\"审题不清\"，要说清楚审题时漏掉了哪个词/哪个条件）\n"
+        "- countermeasure：针对这个错误的一句可执行对策（20-60字）\n"
+        "- explanation：简述考生可能的思维路径（如\"选了B说明他把增长量当成了增长率\"），20-60字\n"
+        "- confidence：0-1 置信度（诊断依据充分→高；信息不足→低）\n\n"
+        "置信度校准：如果考生的错误路径有多种可能，降低 confidence。如果错选选项与正确选项内容差异明显、容易推断错误路径，可以提高 confidence。\n"
+        + profile_section + "\n"
+        '输出 JSON：{"items":[{"specific_error":"把环比当成同比——题干给的是上月数据应套环比公式，但选了同比增长率","countermeasure":"先圈出题干时间词确认比较基准——和上月比用环比，和去年同月比用同比","explanation":"看到增长率就直接套了同比公式，没检查比较基准是上月还是去年同月","confidence":0.85},...]}'
     )
 
     llm_config = _load_llm_config()
     model = llm_config.get('model', 'deepseek-chat')
 
+    last_err = ''
     for attempt in range(retry + 1):
         try:
             client = _get_client()
@@ -475,23 +510,25 @@ def diagnose_error_batch(
                 if not isinstance(r, dict):
                     r = {}
                 out.append({
-                    'error_type': _normalize_error_type(r.get('error_type', '其他')),
                     'confidence': float(r.get('confidence', 0.3)),
                     'explanation': str(r.get('explanation', ''))[:120],
+                    'specific_error': str(r.get('specific_error', ''))[:80],
+                    'countermeasure': str(r.get('countermeasure', ''))[:80],
                 })
 
             # 补齐到输入长度
             while len(out) < len(questions):
-                out.append({'error_type': '其他', 'confidence': 0.0, 'explanation': ''})
+                out.append({'confidence': 0.0, 'explanation': '', 'specific_error': '', 'countermeasure': ''})
             return out[:len(questions)]
 
-        except Exception:
+        except Exception as e:
+            last_err = f'{type(e).__name__}: {e}'
             if attempt < retry:
                 time.sleep(2 ** attempt)
             continue
 
-    # 全部失败：返回兜底
-    return [{'error_type': '其他', 'confidence': 0.0, 'explanation': '诊断失败'} for _ in questions]
+    # 全部失败：返回兜底（带上真实错误信息）
+    return [{'confidence': 0.0, 'explanation': f'诊断失败({last_err[:60]})', 'specific_error': '', 'countermeasure': ''} for _ in questions]
 
 
 def evaluate_shenlun_answer(
@@ -551,24 +588,3 @@ def evaluate_shenlun_answer(
         }
 
 
-def _normalize_error_type(error_type: str) -> str:
-    """标准化错误类型标签，支持 LLM 常见变体。"""
-    alias_map = {
-        '知识点错误': '记忆盲区', '知识点不熟': '记忆盲区', '知识盲区': '记忆盲区',
-        '遗忘': '记忆盲区', '没见过': '记忆盲区', '没掌握': '记忆盲区',
-        '粗心': '审题不清', '看错': '审题不清', '马虎': '审题不清',
-        '没看清': '审题不清', '误解': '审题不清', '理解错误': '概念混淆',
-        '算错': '计算失误', '计算错误': '计算失误',
-        '用错公式': '公式用错', '记错公式': '公式用错',
-        '蒙': '时间不足蒙的', '猜': '时间不足蒙的', '没时间': '时间不足蒙的',
-        '来不及': '时间不足蒙的', '不会': '放弃',
-    }
-    et = error_type.strip()
-    if et in alias_map:
-        return alias_map[et]
-    valid = ['计算失误', '公式用错', '概念混淆', '审题不清',
-             '时间不足蒙的', '记忆盲区', '放弃', '其他']
-    for vt in valid:
-        if vt in et:
-            return vt
-    return '其他'

@@ -10,8 +10,8 @@ router = APIRouter(tags=["insights"])
 
 @router.get("/insights/error-distribution")
 def error_distribution(db=Depends(get_db)):
-    """错误类型分布（按模块→题型）"""
-    return db.get_error_type_by_module()
+    """错误类型分布已废弃——返回空列表"""
+    return []
 
 
 @router.get("/insights/accuracy-gap")
@@ -29,12 +29,18 @@ def persistent_weak(db=Depends(get_db)):
 
 @router.get("/insights/exams-compare")
 def exams_compare(a: int = Query(...), b: int = Query(...), db=Depends(get_db)):
-    """两场考试各模块正确率对比"""
+    """两场考试各模块正确率对比（仅同类型可比较）"""
     exams = db.get_exam_records()
     e1 = next((e for e in exams if e["id"] == a), None)
     e2 = next((e for e in exams if e["id"] == b), None)
     if not e1 or not e2:
         return {"error": "exam not found"}
+
+    # 禁止跨考试类型比较（公基 vs 行测 模块不同，没有可比性）
+    t1 = e1.get("exam_type", "行测/职测")
+    t2 = e2.get("exam_type", "行测/职测")
+    if t1 != t2:
+        return {"error": f"不能跨考试类型比较：{t1} vs {t2}，模块体系不同无意义"}
 
     from collections import defaultdict
 
@@ -67,6 +73,8 @@ def exams_compare(a: int = Query(...), b: int = Query(...), db=Depends(get_db)):
     return {
         "exam_a": e1["exam_name"],
         "exam_b": e2["exam_name"],
+        "type_a": t1,
+        "type_b": t2,
         "modules": [
             {
                 "module": m,
@@ -87,75 +95,12 @@ def kp_detail(name: str = Query(...), db=Depends(get_db)):
 
 @router.get("/insights/contradiction")
 def contradiction_analysis(db=Depends(get_db)):
-    """矛盾分析：找出拖累全局的主要短板"""
-    import json as _j, os as _os
-    from collections import defaultdict
+    """矛盾分析——按考试类型独立缓存，诊断完成后已预生成，秒返。
 
-    exams = db.get_exam_records()
-    mod_accuracy_per_exam = []  # [{exam_name, 模块: accuracy}]
-
-    for exam in exams:
-        rp = exam["report_path"]
-        if not _os.path.exists(rp): continue
-        qs = db.get_questions_by_report(rp)
-        with open(rp, "r", encoding="utf-8") as f:
-            data = _j.load(f)
-        raw_qs = data if isinstance(data, list) else data.get("questions", [])
-        q_map = {q.get("key", ""): q for q in raw_qs if isinstance(q, dict)}
-
-        mod_counts = defaultdict(lambda: [0, 0])
-        for qa in qs:
-            rq = q_map.get(qa["question_key"], {})
-            kps = rq.get("keypoints", [])
-            names = [k.get("name", "") for k in kps]
-            from utils.analysis import classify_module
-            mm = classify_module(list(set(names))) if names else {}
-            mod = next(iter(mm.keys()), "其他") if mm else "其他"
-            mod_counts[mod][0] += 1
-            if qa.get("is_correct"): mod_counts[mod][1] += 1
-
-        entry = {"name": (exam["exam_name"] or "")[:20], "date": exam["exam_date"]}
-        for mod, (t, c) in mod_counts.items():
-            if t >= 3: entry[mod] = round(c / t * 100, 1)
-        mod_accuracy_per_exam.append(entry)
-
-    if len(mod_accuracy_per_exam) < 2:
-        return {"principal": "", "analysis": [], "advice": "需要≥2场考试才能分析"}
-
-    # 找出整体正确率最低的模块（主要矛盾）
-    all_mods = set()
-    for m in mod_accuracy_per_exam: all_mods.update(k for k in m if k not in ("name", "date"))
-
-    mod_avg = {}
-    for mod in all_mods:
-        vals = [m[mod] for m in mod_accuracy_per_exam if mod in m]
-        if vals: mod_avg[mod] = round(sum(vals) / len(vals), 1)
-
-    sorted_mods = sorted(mod_avg.items(), key=lambda x: x[1])
-    principal = sorted_mods[0][0] if sorted_mods else ""
-
-    # 分析连锁影响：哪个模块拖累全局最严重
-    analysis = []
-    for mod, avg in sorted_mods[:4]:
-        # 计算该模块与总分的相关性
-        others_avg = sorted([(m, a) for m, a in sorted_mods if m != mod], key=lambda x: x[1])
-        improvement = others_avg[0][1] - avg if others_avg else 0
-        analysis.append({
-            "module": mod, "accuracy": avg,
-            "gap": round(improvement, 1),
-            "advice": f"该模块正确率{avg}%，与最强模块差距{round(improvement, 1)}个百分点。" + (
-                "该模块的基础能力可能影响其他模块表现，优先攻克。" if avg < 50 else
-                "该模块有较大提升空间，建议针对性训练。" if avg < 65 else
-                "该模块表现接近平均水平，保持即可。" if avg < 75 else
-                "该模块表现正常。"
-            ) if improvement > 5 else "各模块表现均衡，继续保持。"
-        })
-
-    return {
-        "principal": principal,
-        "analysis": analysis,
-        "advice": f"主要矛盾在「{principal}」，攻克它可能带来最大的整体提升。"
-    }
+    返回格式：{ "行测/职测": {...}, "公基": {...} }
+    """
+    from utils.analysis import generate_contradiction_analysis
+    return generate_contradiction_analysis(db)
 
 
 @router.get("/insights/exam-trend")

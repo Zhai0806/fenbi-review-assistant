@@ -315,7 +315,6 @@ def _render_wrong_q_bank(db: KnowledgeDB, current_report_path: str = ''):
                     'your_answer': qa.get('your_answer', '') if qa else q.get('your_answer', ''),
                     'correct_answer': qa.get('correct_answer', '') if qa else q.get('correct_answer', ''),
                     'module': mod,
-                    'error_type': qa.get('error_type', '') if qa else '',
                     'time_spent_sec': q.get('time_spent_sec', 0),
                     'materialKeys': q.get('materialKeys', []),
                 })
@@ -379,7 +378,7 @@ def _render_wrong_q_bank(db: KnowledgeDB, current_report_path: str = ''):
             st.session_state['wqb_score'] += 1
             st.success(f"✅ 正确！")
         else:
-            st.error(f"❌ 你选 {choice[0]}，正确 {_index_to_letter(correct)} | 原错因：{q.get('error_type', '-')}")
+            st.error(f"❌ 你选 {choice[0]}，正确 {_index_to_letter(correct)}")
         st.session_state['wqb_index'] += 1
         st.rerun()
 
@@ -409,7 +408,6 @@ def _render_all_questions(questions: list[dict], db: KnowledgeDB):
             '结果': '❌' if is_wrong else '✅',
             '用时(秒)': q.get('time_spent_sec') or '-',
             '全站正确率': f"{ratio * 100:.1f}%",
-            '错误类型': q.get('error_type') or '-',
             '蒙对': '🎯' if q.get('is_guessed_correct') else '',
             '超时': '⏰' if q.get('is_time_anomaly') else '',
         })
@@ -439,42 +437,30 @@ def _render_wrong_questions(questions: list[dict], db: KnowledgeDB, report_path:
     wrong_qs.sort(key=lambda q: int(_re.search(r'第(\d+)题', q.get('source', '')).group(1))
                   if _re.search(r'第(\d+)题', q.get('source', '')) else 9999)
 
-    valid_error_types = [
-        '计算失误', '公式用错', '概念混淆', '审题不清',
-        '时间不足蒙的', '记忆盲区', '放弃', '其他'
-    ]
-
     # ── AI 诊断区 ──
     pending = db.get_pending_diagnoses(report_path) if report_path else []
-    unlabeled = sum(1 for q in wrong_qs if not q.get('error_type') or q['error_type'] == '其他')
 
     st.markdown(f"共 **{len(wrong_qs)}** 道错题 | "
-                f"📝 {unlabeled} 未标注 | "
                 f"📋 {len(pending)} 待确认")
 
     col1, col2 = st.columns([1, 2])
     with col1:
-        batches_est = max(1, (unlabeled + 4) // 5)
-        cost_est = batches_est * 0.005  # ~¥0.005/batch
+        batches_est = max(1, (len(wrong_qs) + 4) // 5)
+        cost_est = batches_est * 0.005
         if st.button(
-            f"🤖 AI 诊断 ({unlabeled}题 · ~¥{cost_est:.2f})",
+            f"🤖 AI 诊断 ({len(wrong_qs)}题 · ~¥{cost_est:.2f})",
             type="primary",
-            disabled=unlabeled == 0,
             key=f"ai_diag_{report_path[-20:]}"
         ):
             with st.spinner(f"批量诊断中（{batches_est} 批，约 {batches_est*3} 秒）..."):
                 from utils.analysis import diagnose_report_errors
-                result = diagnose_report_errors(db, report_path)
-                st.toast(f"✅ {result.get('diagnosed', 0)} 道已诊断"
-                        f"（{result.get('batches', '?')} 批），"
-                        f"跳过 {result.get('skipped', 0)} 道")
+                result = list(diagnose_report_errors(db, report_path))
+                done = next((r for r in result if r.get('status') == 'done'), {})
+                st.toast(f"✅ {done.get('diagnosed', 0)} 道已诊断")
                 st.rerun()
     with col2:
-        labeled = len(wrong_qs) - unlabeled
-        if labeled > 0:
-            st.caption(f"📌 {labeled} 道已有标注，无需重复诊断")
-        if unlabeled > 0:
-            st.caption(f"💡 {unlabeled} 道待诊断 · 5题/批 ≈ {batches_est} 次调用 · ~¥{cost_est:.2f}")
+        if len(wrong_qs) > 0:
+            st.caption(f"💡 {len(wrong_qs)} 道待诊断 · ~¥{cost_est:.2f}")
         if pending:
             st.caption("确认诊断后可查看个性化学习方案")
 
@@ -504,7 +490,7 @@ def _render_wrong_questions(questions: list[dict], db: KnowledgeDB, report_path:
         st.markdown("### 📋 确认 AI 诊断")
 
         # 批量操作
-        all_ids = {p['id']: p['error_type'] for p in pending}
+        all_ids = {p['id']: '' for p in pending}
         selected = st.session_state.get('selected_diags', {})
         all_selected = all_ids and all(pid in selected for pid in all_ids)
 
@@ -521,8 +507,8 @@ def _render_wrong_questions(questions: list[dict], db: KnowledgeDB, report_path:
             n_selected = len(selected)
             if st.button(f"✅ 确认 {n_selected} 条" if n_selected else "✅ 确认",
                          type="primary", disabled=n_selected == 0):
-                for pid, etype in selected.items():
-                    db.confirm_diagnosis(pid, final_error_type=etype)
+                for pid in selected:
+                    db.confirm_diagnosis(pid)
                 st.session_state['selected_diags'] = {}
                 st.toast(f"✅ 已确认 {n_selected} 条")
                 st.rerun()
@@ -591,23 +577,20 @@ def _render_wrong_questions(questions: list[dict], db: KnowledgeDB, report_path:
                         st.caption(
                             f"🖊 你的：{_index_to_letter(qa.get('your_answer'))}  |  "
                             f"✅ 正确：{_index_to_letter(qa.get('correct_answer'))}  |  "
-                            f"💬 AI：{p['error_type']}（{p['confidence']:.0%}）{p['explanation']}"
+                            f"💬 {p.get('specific_error', '')} "
+                            f"💡 {p.get('countermeasure', '')}"
                         )
-                        cc1, cc2, cc3 = st.columns([2, 2, 1])
+                        if p.get('explanation'):
+                            st.caption(f"📝 {p['explanation']}")
+                        cc1, cc2 = st.columns([1, 1])
                         with cc1:
                             if st.checkbox("采纳", value=checked, key=f"chk_{pid}"):
-                                st.session_state.setdefault('selected_diags', {})[pid] = p['error_type']
+                                st.session_state.setdefault('selected_diags', {})[pid] = ''
                             elif pid in st.session_state.get('selected_diags', {}):
                                 del st.session_state['selected_diags'][pid]
                         with cc2:
-                            new_type = st.selectbox("类型", valid_error_types,
-                                index=valid_error_types.index(p['error_type']) if p['error_type'] in valid_error_types else -1,
-                                key=f"ct_{pid}", label_visibility="collapsed")
-                            if new_type != p['error_type']:
-                                st.session_state.setdefault('selected_diags', {})[pid] = new_type
-                        with cc3:
-                            if st.button("✅", key=f"ok_{pid}"):
-                                db.confirm_diagnosis(pid, final_error_type=new_type)
+                            if st.button("✅ 确认", key=f"ok_{pid}"):
+                                db.confirm_diagnosis(pid)
                                 st.session_state.setdefault('selected_diags', {}).pop(pid, None)
                                 st.rerun()
 
@@ -630,7 +613,7 @@ def _render_wrong_questions(questions: list[dict], db: KnowledgeDB, report_path:
             label = _question_label({'source': qa.get('source', ''), 'question_key': p['question_key']}, compact=True, index=pi)
 
             with st.expander(
-                f"{label} — 🤖 {p['error_type']}（{p['confidence']:.0%}）{'✅ 已选' if checked else ''}",
+                f"{label} — {p.get('specific_error', '')[:20]}（{p['confidence']:.0%}）{'✅ 已选' if checked else ''}",
                 expanded=(pi <= 2)
             ):
                 if q_html:
@@ -642,44 +625,37 @@ def _render_wrong_questions(questions: list[dict], db: KnowledgeDB, report_path:
                     st.caption(f"🏷 {kp_path}")
                 st.caption(
                     f"🖊 你的：{_index_to_letter(qa.get('your_answer'))}  |  "
-                    f"✅ 正确：{_index_to_letter(qa.get('correct_answer'))}  |  "
-                    f"💬 AI：{p['explanation']}"
+                    f"✅ 正确：{_index_to_letter(qa.get('correct_answer'))}"
                 )
-                cc1, cc2, cc3 = st.columns([2, 2, 1])
+                if p.get('specific_error'):
+                    st.caption(f"❌ 错因：{p['specific_error']}")
+                if p.get('countermeasure'):
+                    st.caption(f"💡 对策：{p['countermeasure']}")
+                if p.get('explanation'):
+                    st.caption(f"📝 {p['explanation']}")
+                cc1, cc2 = st.columns([1, 1])
                 with cc1:
                     if st.checkbox("采纳", value=checked, key=f"chk_{pid}"):
-                        st.session_state.setdefault('selected_diags', {})[pid] = p['error_type']
+                        st.session_state.setdefault('selected_diags', {})[pid] = ''
                     elif pid in st.session_state.get('selected_diags', {}):
                         del st.session_state['selected_diags'][pid]
                 with cc2:
-                    new_type = st.selectbox("类型", valid_error_types,
-                        index=valid_error_types.index(p['error_type']) if p['error_type'] in valid_error_types else -1,
-                        key=f"ct_{pid}", label_visibility="collapsed")
-                    if new_type != p['error_type']:
-                        st.session_state.setdefault('selected_diags', {})[pid] = new_type
-                with cc3:
-                    if st.button("✅", key=f"ok_{pid}"):
-                        db.confirm_diagnosis(pid, final_error_type=new_type)
+                    if st.button("✅ 确认", key=f"ok_{pid}"):
+                        db.confirm_diagnosis(pid)
                         st.session_state.setdefault('selected_diags', {}).pop(pid, None)
                         st.rerun()
 
         return  # 有待确认项时，不显示下面的手动列表
 
     # ── 学习建议 ──
-    labeled = sum(1 for q in wrong_qs if q.get('error_type') and q['error_type'] != '其他')
-    if labeled >= len(wrong_qs) * 0.5:
+    if len(wrong_qs) > 0:
         # 每日复习日程
-        from collections import Counter
-        et_counts = Counter(q.get('error_type', '其他') for q in wrong_qs if q.get('error_type') and q['error_type'] != '其他')
-        top_et = et_counts.most_common(3)
-        if top_et:
-            st.markdown("### 📅 本周复习计划")
-            st.markdown(
-                f"- **今日**：重做本卷 {len(wrong_qs)} 道错题（重做模式），每题写错因总结\n"
-                f"- **明天**：针对「{top_et[0][0]}」做 10 道同类题\n"
-                + (f"- **后天**：针对「{top_et[1][0]}」做 10 道同类题\n" if len(top_et) > 1 else "") +
-                f"- **周末**：完整复盘本卷，标记仍有困难的知识点"
-            )
+        st.markdown("### 📅 本周复习计划")
+        st.markdown(
+            f"- **今日**：重做本卷 {len(wrong_qs)} 道错题（重做模式），每题写错因总结\n"
+            f"- **明天**：针对薄弱模块做 10 道同类题\n"
+            f"- **周末**：完整复盘本卷，标记仍有困难的知识点"
+        )
         _render_learning_advice(wrong_qs, db)
 
     # ── 手动微调列表 ──
@@ -699,7 +675,7 @@ def _render_wrong_questions(questions: list[dict], db: KnowledgeDB, report_path:
     from utils.llm import _strip_html as _sh
 
     for i, q in enumerate(wrong_qs, 1):
-        current_type = q.get('error_type') or '其他'
+        current_specific = q.get('specific_error') or ''
         rq = retry_raw.get(q['question_key'], {})
         label = _question_label(q, compact=True, index=i)
 
@@ -722,12 +698,11 @@ def _render_wrong_questions(questions: list[dict], db: KnowledgeDB, report_path:
                             st.success(f"✅ 正确！答案就是 {choice[0]}")
                         else:
                             st.error(f"❌ 选 {choice[0]}，正确是 {_index_to_letter(correct)}")
-                        st.caption(f"💡 原错因：{current_type}")
         else:
             # 普通模式
             with st.expander(
                 f"{label} | 你的：{_index_to_letter(q.get('your_answer'))} → "
-                f"正确：{_index_to_letter(q.get('correct_answer'))} | {current_type}",
+                f"正确：{_index_to_letter(q.get('correct_answer'))}",
                 expanded=False
             ):
                 q_html = rq.get('content', '') if rq else ''
@@ -746,19 +721,8 @@ def _render_wrong_questions(questions: list[dict], db: KnowledgeDB, report_path:
 
             col1, col2 = st.columns([1, 1])
             with col1:
-                try:
-                    type_idx = valid_error_types.index(current_type)
-                except ValueError:
-                    type_idx = len(valid_error_types) - 1
-                new_type = st.selectbox(
-                    "错误类型", valid_error_types, index=type_idx,
-                    key=f"mt_{q['question_key']}"
-                )
-                if new_type != current_type:
-                    db.update_question_field(q['question_key'], 'error_type', new_type)
-                    if report_path:
-                        db._sync_kp_error_type(report_path, q['question_key'], new_type)
-                    st.toast(f"✅ {new_type}")
+                if current_specific:
+                    st.caption(f"💬 {current_specific}")
             with col2:
                 current_note = q.get('user_note', '')
                 new_note = st.text_area(
@@ -773,7 +737,6 @@ def _render_wrong_questions(questions: list[dict], db: KnowledgeDB, report_path:
     from utils.llm import _strip_html as _sh
     export_text = "# 错题清单\n\n"
     for i, q in enumerate(wrong_qs, 1):
-        et = q.get('error_type') or '其他'
         rq = retry_raw.get(q['question_key'], {})
         # 材料
         mat_keys = rq.get('materialKeys', []) if rq else []
@@ -795,7 +758,7 @@ def _render_wrong_questions(questions: list[dict], db: KnowledgeDB, report_path:
             f"**选项**：\n{opt_text}\n\n"
             f"- 你的答案：{_index_to_letter(q.get('your_answer'))} | "
             f"正确答案：{_index_to_letter(q.get('correct_answer'))}\n"
-            f"- 错误类型：{et} | 用时：{q.get('time_spent_sec', '-')}秒\n"
+            f"- 用时：{q.get('time_spent_sec', '-')}秒\n"
             f"- 全站正确率：{(q.get('global_correct_ratio', 0) or 0) * 100:.1f}%\n\n"
             f"---\n\n"
         )
@@ -880,67 +843,36 @@ def _render_links(db: KnowledgeDB):
 
 def _render_learning_advice(wrong_qs: list[dict], db: KnowledgeDB):
     """基于真实错题数据生成可执行的学习方案。"""
-    from collections import Counter, defaultdict
-
-    # 从 DB 获取模块→题型→错误类型分布
-    by_module = db.get_error_type_by_module()
-    if not by_module:
-        return
+    from collections import defaultdict
 
     st.markdown("### 🧠 个性化学习方案")
-    st.caption("基于你的错题数据自动生成，不是泛化的模板建议")
+    st.caption("基于你的错题数据自动生成")
 
-    # 按模块聚合
-    mod_error = defaultdict(lambda: defaultdict(int))
-    mod_total = defaultdict(int)
-    for r in by_module:
-        if r['error_type'] == '其他':
-            continue
-        mod_error[r['module']][r['error_type']] += r['count']
-        mod_total[r['module']] += r['count']
-
-    # 错误类型→认知策略
-    strategy = {
-        '记忆盲区': ('间隔重复', '闪卡回忆，按 1-3-7-14 天间隔'),
-        '计算失误': ('限时速算', '每天 10 道限时计算，用草稿纸分区'),
-        '概念混淆': ('对比辨析', '做概念对比表，用费曼法讲出来'),
-        '审题不清': ('圈画训练', '读题时笔圈否定词和提问词'),
-        '公式用错': ('检索默写', '不看书默公式→核对→做变式题'),
-        '时间不足蒙的': ('节奏控制', '2分钟无思路果断跳，先易后难'),
-        '放弃': ('微习惯', '每天只做 2 道该模块题，先建立信心'),
-    }
+    # 按模块统计错题
+    mod_error_count = defaultdict(int)
+    for q in wrong_qs:
+        mod = q.get('module', '其他')
+        mod_error_count[mod] += 1
 
     # 按总错题数排序模块
-    sorted_mods = sorted(mod_total.items(), key=lambda x: -x[1])
+    sorted_mods = sorted(mod_error_count.items(), key=lambda x: -x[1])
 
     for mod, total_err in sorted_mods:
         if total_err < 3:
             continue
-        err_types = mod_error[mod]
-        top_err = max(err_types, key=err_types.get) if err_types else None
-        if not top_err:
-            continue
-
-        strat_name, strat_desc = strategy.get(top_err, ('针对性练习', '逐题分析错因'))
 
         with st.expander(
-            f"**{mod}**（{total_err} 道错题 · 主要问题：{top_err}）",
+            f"**{mod}**（{total_err} 道错题）",
             expanded=(total_err >= 8)
         ):
-            # 主要错误类型分布
-            sorted_errs = sorted(err_types.items(), key=lambda x: -x[1])
-            err_str = ' | '.join(f'{et}×{c}' for et, c in sorted_errs[:4])
-            st.markdown(f"**错误分布**：{err_str}")
-
-            # 核心策略
-            st.markdown(f"**🎯 核心策略**：{strat_name} — {strat_desc}")
+            st.markdown(f"**错题数**：{total_err} 道")
 
             # 可执行的周计划
             st.markdown("**📅 本周行动计划**：")
             if mod in ('常识判断', '政治理论'):
                 st.markdown(
                     f"- 每天早上通勤时用闪卡复习该模块知识点（15 分钟）\n"
-                    f"- 睡前回顾当天错题涉及的 {sorted_errs[0][0] if sorted_errs else '知识点'}（5 分钟）\n"
+                    f"- 睡前回顾当天错题（5 分钟）\n"
                     f"- 周末集中做 1 套该模块专项练习，标记反复出错的点"
                 )
             elif mod in ('资料分析', '数量关系'):
@@ -1373,60 +1305,26 @@ def _render_trend_analysis(db: KnowledgeDB):
 
 
 def _render_error_distribution(db: KnowledgeDB):
-    """渲染错误类型分布——按模块展开到题型粒度。"""
-    by_module = db.get_error_type_by_module()
-
-    if not by_module:
-        st.info("暂无错误诊断数据。请先对错题运行 AI 诊断并确认。")
-        return
-
-    # 过滤「其他」
-    effective = [r for r in by_module if r['error_type'] != '其他']
-    other_total = sum(r['count'] for r in by_module if r['error_type'] == '其他')
-    total = sum(r['count'] for r in by_module)
-
-    if not effective:
-        st.info("所有错误类型均为「其他」，请到错题列表运行 AI 诊断并确认。")
-        return
-
-    # 按模块分组
+    """错误类型分布已废弃——改为按模块错题分布。"""
     from collections import defaultdict
-    mod_data = defaultdict(lambda: defaultdict(int))
-    for r in effective:
-        mod_data[r['module']][r['error_type']] += r['count']
 
-    # 全局饼图
-    global_dist = defaultdict(int)
-    for r in effective:
-        global_dist[r['error_type']] += r['count']
+    mod_count = defaultdict(int)
+    exams = db.get_exam_records()
+    for exam in exams:
+        qs = db.get_questions_by_report(exam['report_path'])
+        for q in qs:
+            if not q.get('is_correct', True):
+                # 通过原始数据推断模块
+                mod_count['未知'] += 1
 
-    fig = px.pie(
-        names=list(global_dist.keys()), values=list(global_dist.values()),
-        title=f'全局错误类型分布（共 {total} 次，已排除「其他」{other_total} 次）',
-        color_discrete_sequence=px.colors.qualitative.Set2,
-    )
-    fig.update_layout(height=350, margin=dict(l=20, r=20, t=40, b=20))
-    st.plotly_chart(fig, use_container_width=True)
+    if not mod_count:
+        st.info("暂无错题数据。")
+        return
 
-    # 按模块展开
-    st.markdown("### 📊 各模块错误类型")
-    for mod in sorted(mod_data.keys()):
-        dist = mod_data[mod]
-        mod_total = sum(dist.values())
-        if mod_total < 3:
-            continue  # 样本太少跳过
-        with st.expander(f"**{mod}**（{mod_total} 次错误）", expanded=(mod_total >= 10)):
-            # 按题型细分
-            qt_data = defaultdict(lambda: defaultdict(int))
-            for r in effective:
-                if r['module'] == mod:
-                    qt_data[r['question_type']][r['error_type']] += r['count']
-
-            for qt, qt_dist in sorted(qt_data.items()):
-                qt_total = sum(qt_dist.values())
-                sorted_types = sorted(qt_dist.items(), key=lambda x: -x[1])
-                type_str = ' | '.join(f"{et}×{c}" for et, c in sorted_types[:4])
-                st.markdown(f"- **{qt}**（{qt_total}次）：{type_str}")
+    st.markdown("### 📊 各模块错题分布")
+    sorted_mods = sorted(mod_count.items(), key=lambda x: -x[1])
+    for mod, cnt in sorted_mods:
+        st.markdown(f"- **{mod}**：{cnt} 道错题")
 
     all_points = db.get_all_knowledge_points()
     matrix_data = {'easy': [], 'medium': [], 'hard': []}
